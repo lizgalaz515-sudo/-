@@ -1,0 +1,11 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const root = path.resolve(__dirname, '..');
+const check = spawnSync(process.execPath, [path.join(__dirname, 'check.cjs')], { stdio: 'inherit' });
+if (check.status !== 0) process.exit(check.status || 1);
+const destination = path.join(root, 'dist');
+fs.mkdirSync(destination, { recursive: true });
+for (const directory of ['preview','miniprogram']) fs.cpSync(path.join(root, directory), path.join(destination, directory), { recursive: true });
+fs.writeFileSync(path.join(destination, 'index.html'), '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/preview/index.html"><title>练记小程序预览</title></html>\n');
+console.log('Browser preview built in dist/. WeChat sources remain in miniprogram/.');

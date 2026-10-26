@@ -1,0 +1,19 @@
+{
+  "name": "lianji-miniprogram",
+  "version": "1.0.0",
+  "private": true,
+  "description": "练记 · 微信健身训练记录小程序",
+  "scripts": {
+    "dev": "node scripts/preview-server.cjs",
+    "check": "node scripts/check.cjs",
+    "test": "node scripts/test.cjs",
+    "test:e2e": "playwright test",
+    "build:preview": "node scripts/build-preview.cjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  }
+}

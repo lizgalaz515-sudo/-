@@ -1,0 +1,7 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+project.private.config.json
+.DS_Store
+*.log

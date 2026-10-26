@@ -1,0 +1,13 @@
+{
+  "pages": ["pages/index/index"],
+  "window": {
+    "navigationBarTitleText": "练记",
+    "navigationBarBackgroundColor": "#f7f7fb",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f7f7fb",
+    "backgroundTextStyle": "dark"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

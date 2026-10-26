@@ -1,0 +1,243 @@
+const STORAGE_KEY = 'lianji.fitness.v1'
+
+const MUSCLE_GROUPS = ['背部', '腿部', '胸部', '肩部', '手臂', '核心']
+
+const EXERCISES = [
+  { id: 'lat-pulldown', name: '高位下拉', muscle: '背部', kind: 'weighted' },
+  { id: 'seated-row', name: '坐姿划船', muscle: '背部', kind: 'weighted' },
+  { id: 'barbell-row', name: '杠铃划船', muscle: '背部', kind: 'weighted' },
+  { id: 'pull-up', name: '引体向上', muscle: '背部', kind: 'bodyweight' },
+  { id: 'leg-press', name: '倒蹬腿举', muscle: '腿部', kind: 'weighted' },
+  { id: 'squat', name: '杠铃深蹲', muscle: '腿部', kind: 'weighted' },
+  { id: 'romanian-deadlift', name: '罗马尼亚硬拉', muscle: '腿部', kind: 'weighted' },
+  { id: 'leg-extension', name: '坐姿腿屈伸', muscle: '腿部', kind: 'weighted' },
+  { id: 'leg-curl', name: '俯卧腿弯举', muscle: '腿部', kind: 'weighted' },
+  { id: 'bench-press', name: '杠铃卧推', muscle: '胸部', kind: 'weighted' },
+  { id: 'incline-dumbbell-press', name: '上斜哑铃卧推', muscle: '胸部', kind: 'weighted' },
+  { id: 'cable-fly', name: '绳索夹胸', muscle: '胸部', kind: 'weighted' },
+  { id: 'push-up', name: '俯卧撑', muscle: '胸部', kind: 'bodyweight' },
+  { id: 'shoulder-press', name: '哑铃推肩', muscle: '肩部', kind: 'weighted' },
+  { id: 'lateral-raise', name: '哑铃侧平举', muscle: '肩部', kind: 'weighted' },
+  { id: 'face-pull', name: '绳索面拉', muscle: '肩部', kind: 'weighted' },
+  { id: 'biceps-curl', name: '哑铃弯举', muscle: '手臂', kind: 'weighted' },
+  { id: 'triceps-pushdown', name: '绳索下压', muscle: '手臂', kind: 'weighted' },
+  { id: 'hammer-curl', name: '锤式弯举', muscle: '手臂', kind: 'weighted' },
+  { id: 'crunch', name: '卷腹', muscle: '核心', kind: 'bodyweight' },
+  { id: 'hanging-leg-raise', name: '悬垂举腿', muscle: '核心', kind: 'bodyweight' },
+  { id: 'cable-crunch', name: '绳索卷腹', muscle: '核心', kind: 'weighted' },
+]
+
+function uid() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+}
+
+/** Calendar dates are local, so a late-night workout never lands on tomorrow. */
+function localDate(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function emptyData() {
+  return { version: 1, workouts: [], activeWorkout: null, restSeconds: 90, demo: false }
+}
+
+/** Demo workouts are explicitly marked and can be removed together before recording. */
+function createInitialData(now = new Date()) {
+  const workouts = []
+  const plans = [
+    { title: '背部训练', exercises: ['lat-pulldown', 'seated-row', 'barbell-row', 'pull-up'], weights: [40, 45, 40, 0], reps: [10, 12, 10, 8] },
+    { title: '腿部训练', exercises: ['leg-press', 'squat', 'romanian-deadlift', 'leg-extension'], weights: [90, 50, 45, 35], reps: [15, 8, 10, 12] },
+    { title: '胸肩训练', exercises: ['bench-press', 'incline-dumbbell-press', 'cable-fly', 'lateral-raise'], weights: [40, 17.5, 10, 5], reps: [10, 10, 12, 15] },
+  ]
+  const daysAgo = [47, 45, 43, 40, 38, 36, 33, 31, 29, 26, 24, 22, 19, 17, 15, 12, 10, 8, 5, 3, 1]
+  daysAgo.forEach((days, index) => {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    date.setDate(date.getDate() - days)
+    const plan = plans[index % plans.length]
+    const progress = Math.floor(index / 6) * 2.5
+    workouts.push({
+      id: uid(),
+      date: localDate(date),
+      title: plan.title,
+      notes: index === daysAgo.length - 1 ? '今天状态不错，下次继续保持。' : '',
+      durationMinutes: 42 + (index % 5) * 4,
+      exercises: plan.exercises.map((exerciseId, exerciseIndex) => ({
+        id: uid(),
+        exerciseId,
+        sets: Array.from({ length: exerciseId === 'pull-up' ? 3 : 4 }, (_, setIndex) => ({
+          id: uid(),
+          weight: plan.weights[exerciseIndex] === 0 ? 0 : plan.weights[exerciseIndex] + progress,
+          reps: plan.reps[exerciseIndex] - (setIndex === 3 ? 2 : 0),
+          completed: true,
+        })),
+      })),
+    })
+  })
+  return { version: 1, workouts, activeWorkout: null, restSeconds: 90, demo: true }
+}
+
+function exerciseVolume(exercise) {
+  if (EXERCISES.find((definition) => definition.id === exercise.exerciseId)?.kind === 'bodyweight') return 0
+  return exercise.sets.reduce((total, set) => total + (set.completed ? set.weight * set.reps : 0), 0)
+}
+
+function workoutVolume(workout) {
+  return workout.exercises.reduce((total, exercise) => total + exerciseVolume(exercise), 0)
+}
+
+function workoutSetCount(workout) {
+  return workout.exercises.reduce((total, exercise) => total + exercise.sets.filter((set) => set.completed).length, 0)
+}
+
+function formatVolume(value) {
+  const rounded = Math.round(value * 10) / 10
+  const parts = String(rounded).split('.')
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return parts.join('.')
+}
+
+function previousExercise(workouts, exerciseId) {
+  const ordered = workouts.map((workout, index) => ({ workout, index })).sort((a, b) => b.workout.date.localeCompare(a.workout.date) || b.index - a.index)
+  for (const { workout } of ordered) {
+    const exercise = workout.exercises.find((item) => item.exerciseId === exerciseId && item.sets.some((set) => set.completed))
+    if (exercise) return exercise
+  }
+  return undefined
+}
+
+function fail(message) {
+  throw new Error(`无法导入：${message}`)
+}
+
+function record(value, label) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) fail(`${label}格式不正确。`)
+  const result = value
+  if (Object.keys(result).some((key) => key === '__proto__' || key === 'prototype' || key === 'constructor')) fail(`${label}含有无效字段。`)
+  return result
+}
+
+function text(value, label, maximum, allowEmpty = false) {
+  if (typeof value !== 'string' || value.length > maximum || (!allowEmpty && !value.trim())) fail(`${label}格式不正确。`)
+  return value
+}
+
+function number(value, label, minimum, maximum, integer = false) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum || (integer && !Number.isInteger(value))) fail(`${label}超出有效范围。`)
+  return value
+}
+
+function list(value, label, maximum) {
+  if (!Array.isArray(value) || value.length > maximum) fail(`${label}格式不正确或数量过多。`)
+  return value
+}
+
+function boolean(value, label) {
+  if (typeof value !== 'boolean') fail(`${label}格式不正确。`)
+  return value
+}
+
+function validDate(value) {
+  const date = text(value, '日期', 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) fail('日期格式应为 YYYY-MM-DD。')
+  const parsed = new Date(`${date}T00:00:00.000Z`)
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) fail('日期不存在。')
+  return date
+}
+
+function parseImport(source) {
+  if (source.length > 10_000_000) fail('文件过大，请使用 10 MB 以内的备份。')
+  let parsed
+  try {
+    parsed = JSON.parse(source)
+  } catch {
+    fail('这不是有效的 JSON 备份文件。')
+  }
+  const data = record(parsed, '备份')
+  if (data.version !== 1) fail('备份版本不受支持。')
+  const identifiers = new Set ()
+  const id = (value) => {
+    const identifier = text(value, '记录标识', 128)
+    if (identifiers.has(identifier)) fail('记录标识重复。')
+    identifiers.add(identifier)
+    return identifier
+  }
+  const parseWorkout = (value) => {
+    const workout = record(value, '训练')
+    const result = {
+      id: id(workout.id),
+      date: validDate(workout.date),
+      title: text(workout.title, '训练名称', 100),
+      notes: text(workout.notes, '训练备注', 5000, true),
+      durationMinutes: number(workout.durationMinutes, '训练时长', 0, 1440, true),
+      exercises: list(workout.exercises, '动作列表', 100).map((value) => {
+        const exercise = record(value, '动作')
+        const exerciseId = text(exercise.exerciseId, '动作名称', 100)
+        const definition = EXERCISES.find((item) => item.id === exerciseId)
+        if (!definition) fail('备份包含不支持的动作。')
+        return {
+          id: id(exercise.id),
+          exerciseId,
+          sets: list(exercise.sets, '组数', 100).map((value) => {
+            const set = record(value, '训练组')
+            const weight = number(set.weight, '重量', 0, 2000)
+            if (definition.kind === 'bodyweight' && weight !== 0) fail('自重动作的重量应为 0。')
+            return {
+              id: id(set.id),
+              weight,
+              reps: number(set.reps, '次数', 1, 1000, true),
+              completed: boolean(set.completed, '完成状态'),
+            }
+          }),
+        }
+      }),
+    }
+    return result
+  }
+  return {
+    version: 1,
+    workouts: list(data.workouts, '训练记录', 5000).map(parseWorkout),
+    activeWorkout: data.activeWorkout === null ? null : parseWorkout(data.activeWorkout),
+    restSeconds: number(data.restSeconds, '休息时长', 0, 1800, true),
+    demo: boolean(data.demo, '示例数据标识'),
+  }
+}
+
+function defaultStorage() {
+  try {
+    if (typeof wx !== 'undefined' && typeof wx.getStorageSync === 'function') {
+      return {
+        getItem: (key) => {
+          const value = wx.getStorageSync(key)
+          return typeof value === 'string' ? value : value ? JSON.stringify(value) : null
+        },
+        setItem: (key, value) => wx.setStorageSync(key, value),
+      }
+    }
+    if (typeof localStorage !== 'undefined') return localStorage
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
+function loadData(storage = defaultStorage()) {
+  try {
+    const stored = storage?.getItem(STORAGE_KEY)
+    return stored ? parseImport(stored) : createInitialData()
+  } catch {
+    return createInitialData()
+  }
+}
+
+/** A false result lets the UI tell users storage is unavailable instead of silently losing data. */
+function saveData(data, storage = defaultStorage()) {
+  if (!storage) return false
+  try {
+    storage.setItem(STORAGE_KEY, JSON.stringify(data))
+    return true
+  } catch {
+    return false
+  }
+}
+
+module.exports = { STORAGE_KEY, MUSCLE_GROUPS, EXERCISES, uid, localDate, emptyData, createInitialData, exerciseVolume, workoutVolume, workoutSetCount, formatVolume, previousExercise, parseImport, loadData, saveData }

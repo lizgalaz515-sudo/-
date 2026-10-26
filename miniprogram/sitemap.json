@@ -1,0 +1,4 @@
+{
+  "desc": "Personal local-first fitness journal; no searchable content.",
+  "rules": [{ "action": "disallow", "page": "*" }]
+}

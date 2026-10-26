@@ -1,0 +1,14 @@
+{
+  "description": "练记：按动作、重量、次数和每一组记录训练",
+  "miniprogramRoot": "miniprogram/",
+  "compileType": "miniprogram",
+  "appid": "",
+  "projectname": "lianji-workout-log",
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true
+  },
+  "condition": {}
+}
