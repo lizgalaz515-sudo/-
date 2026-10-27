@@ -3471,3 +3471,266 @@ text{
   word-break: break-word;
   overflow-wrap: break-word;
 }
+
+/* Drop sets: one completed group can contain several uninterrupted stages. */
+.set-group {
+  box-sizing: border-box;
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  border-bottom: 1px solid #f2edf8;
+}
+
+.set-group.is-drop-set {
+  background: #fcfaff;
+  box-shadow: inset 3px 0 0 #d7c5ee;
+}
+
+.set-group.is-drop-set::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: #d7c5ee;
+  pointer-events: none;
+}
+
+.drop-stage-row {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  gap: 8px;
+  padding: 7px 11px;
+  background: #fcfaff;
+}
+
+.drop-stage-label {
+  display: block;
+  flex: 0 0 20px;
+  width: 20px;
+  min-width: 20px;
+  max-width: 20px;
+  color: #ac8fc3;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.2px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.drop-stage-row .set-input {
+  background: #f1eaf9;
+  color: #866197;
+}
+
+.drop-stage-row .set-done-col {
+  color: #c2add7;
+}
+
+.drop-stage-link {
+  display: block;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.app-shell .remove-drop-stage {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 26px;
+  width: 26px;
+  min-width: 26px;
+  max-width: 26px;
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #c3afd0;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.set-group-footer {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  gap: 6px 8px;
+  padding: 0 11px 9px 39px;
+}
+
+.drop-set-info {
+  display: inline-block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: #f0e7f8;
+  color: #a27db8;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.app-shell .add-drop-stage {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 30px;
+  margin: 0 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid #e8dcf4;
+  border-radius: 6px;
+  background: #f8f3fd;
+  color: #9871b2;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.drop-set-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 6px;
+  border: 1px solid #e5d7f1;
+  border-radius: 5px;
+  background: #f2eafa;
+  color: #a07bb5;
+  font-size: 9px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.detail-drop-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  color: #91729f;
+  font-size: 11px;
+  line-height: 1.8;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  gap: 5px;
+}
+
+.detail-set-group {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.detail-drop-stages {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 13px 10px 42px;
+  background: #fcf9ff;
+  box-shadow: inset 2px 0 0 #dbc8ed;
+}
+
+.detail-drop-stage {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  min-width: 0;
+  max-width: 100%;
+  gap: 4px 12px;
+  padding-top: 7px;
+  color: #a185b2;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.detail-drop-stage > text {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 599px) {
+  .drop-stage-row {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .drop-set-info {
+    font-size: 10px;
+  }
+
+  .app-shell .add-drop-stage {
+    font-size: 11px;
+  }
+
+  .detail-drop-summary,
+  .detail-drop-stage {
+    font-size: 12px;
+  }
+
+  .drop-set-badge {
+    font-size: 10px;
+  }
+}
+
+@media (min-width: 600px) {
+  .drop-stage-row {
+    gap: 15px;
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .drop-stage-label {
+    flex-basis: 35px;
+    width: 35px;
+    min-width: 35px;
+    max-width: 35px;
+    font-size: 11px;
+  }
+
+  .set-group-footer {
+    padding-left: 70px;
+    padding-right: 20px;
+  }
+}

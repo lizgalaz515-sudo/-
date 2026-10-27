@@ -596,3 +596,135 @@ test('unreadable storage blocks profile writes as well as workout writes', () =>
   assert.equal(page.data.sheet, 'nickname');
   assert.match(page.data.nicknameError, /无法保存/);
 });
+
+function dropFixture() {
+  const initial = { ...model.emptyData(), nickname: '训练小周' };
+  initial.activeWorkout = { id: 'drop-workout', date: model.localDate(), title: '背部训练', notes: '保留备注', durationMinutes: 7, exercises: [{ id: 'drop-exercise', exerciseId: 'lat-pulldown', sets: [{ id: 'drop-group', weight: 7.5, reps: 12, completed: false }] }] };
+  return initial;
+}
+
+function enterDropExample(page) {
+  const dataset = { exercise: 'drop-exercise', set: 'drop-group' };
+  page.addDropStage(event(dataset));
+  let drop = page._store.activeWorkout.exercises[0].sets[0].drops[0];
+  page.changeSet(event({ ...dataset, drop: drop.id, field: 'weight' }, '5'));
+  page.changeSet(event({ ...dataset, drop: drop.id, field: 'reps' }, '10'));
+  page.addDropStage(event(dataset));
+  drop = page._store.activeWorkout.exercises[0].sets[0].drops[1];
+  page.changeSet(event({ ...dataset, drop: drop.id, field: 'weight' }, '2.5'));
+  page.changeSet(event({ ...dataset, drop: drop.id, field: 'reps' }, '8'));
+  return dataset;
+}
+
+test('a three-stage drop set records 30 reps, one completed group and 160 kg of training volume', () => {
+  const { page, saved } = launch(dropFixture());
+  const dataset = enterDropExample(page);
+  assert.equal(page.data.active.setCount, 0);
+  assert.equal(page.data.active.volumeLabel, '0');
+  assert.equal(page.data.active.exercises[0].sets[0].stageCount, 3);
+  assert.equal(page.data.active.exercises[0].sets[0].totalReps, 30);
+  page.toggleSet(event(dataset));
+  assert.equal(page.data.active.setCount, 1);
+  assert.equal(page.data.active.volumeLabel, '160');
+  const record = saved().activeWorkout.exercises[0].sets[0];
+  assert.equal(saved().version, 2);
+  assert.deepEqual(model.setStages(record).map(({ weight, reps }) => ({ weight, reps })), [{ weight: 7.5, reps: 12 }, { weight: 5, reps: 10 }, { weight: 2.5, reps: 8 }]);
+  assert.doesNotThrow(() => model.parseImport(JSON.stringify(saved())));
+});
+
+test('copying a drop group preserves the entire pattern with independent unchecked records', () => {
+  const { page, saved } = launch(dropFixture());
+  const dataset = enterDropExample(page);
+  page.toggleSet(event(dataset));
+  page.addSet(event({ exercise: 'drop-exercise' }));
+  const [first, copied] = saved().activeWorkout.exercises[0].sets;
+  assert.equal(copied.completed, false);
+  assert.notEqual(copied.id, first.id);
+  assert.deepEqual(model.setStages(copied).map(({ weight, reps }) => ({ weight, reps })), model.setStages(first).map(({ weight, reps }) => ({ weight, reps })));
+  assert.ok(copied.drops.every((drop, index) => drop.id !== first.drops[index].id));
+  page.changeSet(event({ exercise: 'drop-exercise', set: copied.id, drop: copied.drops[0].id, field: 'weight' }, '1'));
+  assert.equal(saved().activeWorkout.exercises[0].sets[0].drops[0].weight, 5);
+  assert.equal(saved().activeWorkout.exercises[0].sets[1].drops[0].weight, 1);
+  assert.doesNotThrow(() => model.parseImport(JSON.stringify(saved())));
+});
+
+test('drop stages survive history, backup export and the next session without copying completed state or IDs', () => {
+  const { page, saved, clipboard } = launch(dropFixture());
+  const dataset = enterDropExample(page);
+  page.toggleSet(event(dataset));
+  page.finishWorkout();
+  const history = saved().workouts[0];
+  assert.equal(page.data.summary.totalSets, 1);
+  assert.equal(page.data.summary.totalVolume, '160');
+  page.showWorkout(event({ id: history.id }));
+  assert.equal(page.data.detail.exercises[0].sets[0].stages.length, 3);
+  page.exportData();
+  const exported = model.parseImport(clipboard());
+  assert.equal(exported.nickname, '训练小周');
+  assert.deepEqual(exported.workouts[0], history);
+  page.closeSheet();
+  page.startWorkout();
+  const current = saved().activeWorkout.exercises[0].sets[0];
+  const previous = history.exercises[0].sets[0];
+  assert.equal(current.completed, false);
+  assert.notEqual(current.id, previous.id);
+  assert.ok(current.drops.every((drop, index) => drop.id !== previous.drops[index].id));
+  assert.deepEqual(model.setStages(current).map(({ weight, reps }) => ({ weight, reps })), model.setStages(previous).map(({ weight, reps }) => ({ weight, reps })));
+  assert.match(page.data.active.exercises[0].previousLabel, /7\.5 kg.*5 kg.*2\.5 kg.*递减组/);
+});
+
+test('drop-stage decimal drafts remain separate from base fields and invalid reps do not persist', () => {
+  const { page, saved } = launch(dropFixture());
+  const dataset = enterDropExample(page);
+  const drop = saved().activeWorkout.exercises[0].sets[0].drops[0];
+  const field = { ...dataset, drop: drop.id, field: 'weight' };
+  page.changeSet(event(field, '2.'));
+  assert.equal(page.data.active.exercises[0].sets[0].drops[0].weight, '2.');
+  assert.equal(saved().activeWorkout.exercises[0].sets[0].drops[0].weight, 2);
+  page.changeSet(event({ ...dataset, field: 'weight' }, '9'));
+  assert.equal(page.data.active.exercises[0].sets[0].drops[0].weight, '2.');
+  page.changeSet(event(field, '2.5'));
+  page.normalizeSet(event(field, '2.5'));
+  assert.equal(page.data.active.exercises[0].sets[0].drops[0].weight, 2.5);
+  page.changeSet(event({ ...dataset, drop: drop.id, field: 'reps' }, '0'));
+  page.normalizeSet(event({ ...dataset, drop: drop.id, field: 'reps' }, '0'));
+  assert.equal(saved().activeWorkout.exercises[0].sets[0].drops[0].reps, 10);
+  assert.equal(saved().activeWorkout.exercises[0].sets[0].weight, 9);
+  assert.doesNotThrow(() => model.parseImport(JSON.stringify(saved())));
+});
+
+test('adding a stage unchecks the group, the ten-stage limit holds, and removing all drops restores an ordinary set', () => {
+  const { page, saved } = launch(dropFixture());
+  const dataset = enterDropExample(page);
+  page.toggleSet(event(dataset));
+  page.addDropStage(event(dataset));
+  assert.equal(saved().activeWorkout.exercises[0].sets[0].completed, false);
+  assert.equal(page.data.active.setCount, 0);
+  for (let index = 0; index < 15; index++) page.addDropStage(event(dataset));
+  assert.equal(saved().activeWorkout.exercises[0].sets[0].drops.length, 9);
+  for (const drop of saved().activeWorkout.exercises[0].sets[0].drops) page.removeDropStage(event({ ...dataset, drop: drop.id }));
+  const set = saved().activeWorkout.exercises[0].sets[0];
+  assert.equal(Object.prototype.hasOwnProperty.call(set, 'drops'), false);
+  assert.equal(set.weight, 7.5);
+  assert.equal(set.reps, 12);
+  const body = dropFixture();
+  body.activeWorkout.exercises[0].exerciseId = 'crunch';
+  body.activeWorkout.exercises[0].sets[0].weight = 0;
+  const bodyPage = launch(body).page;
+  bodyPage.addDropStage(event(dataset));
+  assert.equal(Object.prototype.hasOwnProperty.call(bodyPage._store.activeWorkout.exercises[0].sets[0], 'drops'), false);
+});
+
+test('renaming a weighted drop exercise preserves all stages and the backup stays valid', () => {
+  const { page, saved } = launch(dropFixture());
+  enterDropExample(page);
+  const previous = saved().activeWorkout.exercises[0].sets;
+  page.startRenameExercise(event({ exercise: 'drop-exercise' }));
+  page.updateExerciseName(event({}, '哑铃飞鸟'));
+  page.selectEditorMuscle(event({ muscle: '肩部' }));
+  page.saveCustomExercise();
+  assert.equal(page.data.active.exercises[0].name, '哑铃飞鸟');
+  assert.deepEqual(saved().activeWorkout.exercises[0].sets, previous);
+  assert.equal(saved().nickname, '训练小周');
+  assert.doesNotThrow(() => model.parseImport(JSON.stringify(saved())));
+});

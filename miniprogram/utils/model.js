@@ -93,9 +93,21 @@ function createInitialData(now = new Date()) {
   return { version: 1, workouts, activeWorkout: null, restSeconds: 90, demo: true, customExercises: [], nickname: '' }
 }
 
+function setStages(set) {
+  return [
+    { id: set.id, weight: set.weight, reps: set.reps },
+    ...(set.drops || []).map((stage) => ({ id: stage.id, weight: stage.weight, reps: stage.reps })),
+  ]
+}
+
+/** A drop set is one group; its external load is the sum of all its stages. */
+function setVolume(set) {
+  return setStages(set).reduce((total, stage) => total + stage.weight * stage.reps, 0)
+}
+
 function exerciseVolume(exercise, customExercises = []) {
   if (resolveExercise(exercise.exerciseId, customExercises)?.kind === 'bodyweight') return 0
-  return exercise.sets.reduce((total, set) => total + (set.completed ? set.weight * set.reps : 0), 0)
+  return exercise.sets.reduce((total, set) => total + (set.completed ? setVolume(set) : 0), 0)
 }
 
 function workoutVolume(workout, customExercises = []) {
@@ -161,6 +173,11 @@ function validDate(value) {
   return date
 }
 
+function hasDropSets(data) {
+  const workoutHasDrops = (workout) => workout.exercises.some((exercise) => exercise.sets.some((set) => Object.prototype.hasOwnProperty.call(set, 'drops')))
+  return data.workouts.some(workoutHasDrops) || Boolean(data.activeWorkout && workoutHasDrops(data.activeWorkout))
+}
+
 function parseImport(source) {
   if (source.length > 10_000_000) fail('文件过大，请使用 10 MB 以内的备份。')
   let parsed
@@ -170,7 +187,7 @@ function parseImport(source) {
     fail('这不是有效的 JSON 备份文件。')
   }
   const data = record(parsed, '备份')
-  if (data.version !== 1) fail('备份版本不受支持。')
+  if (data.version !== 1 && data.version !== 2) fail('备份版本不受支持。')
   // Version 1 backups predating custom exercises omitted this field. Preserve all
   // their existing workout/set IDs and values, adding only an empty catalog.
   const definitionIds = new Set(EXERCISES.map((definition) => definition.id))
@@ -213,20 +230,35 @@ function parseImport(source) {
             const set = record(value, '训练组')
             const weight = number(set.weight, '重量', 0, 2000)
             if (definition.kind === 'bodyweight' && weight !== 0) fail('自重动作的重量应为 0。')
-            return {
+            const result = {
               id: id(set.id),
               weight,
               reps: number(set.reps, '次数', 1, 1000, true),
               completed: boolean(set.completed, '完成状态'),
             }
+            if (Object.prototype.hasOwnProperty.call(set, 'drops')) {
+              if (definition.kind === 'bodyweight') fail('自重动作不能使用递减组。')
+              const drops = list(set.drops, '递减阶段', 9)
+              if (!drops.length) fail('递减组至少需要一个追加阶段。')
+              result.drops = drops.map((value) => {
+                const stage = record(value, '递减阶段')
+                if (Object.prototype.hasOwnProperty.call(stage, 'drops')) fail('递减阶段不能再次嵌套递减组。')
+                return {
+                  id: id(stage.id),
+                  weight: number(stage.weight, '递减阶段重量', 0, 2000),
+                  reps: number(stage.reps, '递减阶段次数', 1, 1000, true),
+                }
+              })
+            }
+            return result
           }),
         }
       }),
     }
     return result
   }
-  return {
-    version: 1,
+  const result = {
+    version: data.version,
     workouts: list(data.workouts, '训练记录', 5000).map(parseWorkout),
     activeWorkout: data.activeWorkout === null ? null : parseWorkout(data.activeWorkout),
     restSeconds: number(data.restSeconds, '休息时长', 0, 1800, true),
@@ -234,6 +266,10 @@ function parseImport(source) {
     customExercises,
     nickname: data.nickname === undefined ? '' : normalizeNickname(data.nickname),
   }
+  // Old version-1 clients silently ignore unknown set fields. Mark drop-set
+  // backups as version 2 so those clients reject and retain the original data.
+  if (hasDropSets(result)) result.version = 2
+  return result
 }
 
 function defaultStorage() {
@@ -267,11 +303,12 @@ function loadData(storage = defaultStorage()) {
 function saveData(data, storage = defaultStorage()) {
   if (!storage) return false
   try {
-    storage.setItem(STORAGE_KEY, JSON.stringify(data))
+    const stored = data.version === 1 && hasDropSets(data) ? { ...data, version: 2 } : data
+    storage.setItem(STORAGE_KEY, JSON.stringify(stored))
     return true
   } catch {
     return false
   }
 }
 
-module.exports = { STORAGE_KEY, MUSCLE_GROUPS, EXERCISES, exerciseDefinitions, resolveExercise, uid, localDate, normalizeNickname, emptyData, createInitialData, exerciseVolume, workoutVolume, workoutSetCount, formatVolume, previousExercise, parseImport, loadData, saveData }
+module.exports = { STORAGE_KEY, MUSCLE_GROUPS, EXERCISES, exerciseDefinitions, resolveExercise, uid, localDate, normalizeNickname, emptyData, createInitialData, setStages, setVolume, exerciseVolume, workoutVolume, workoutSetCount, formatVolume, previousExercise, parseImport, loadData, saveData }

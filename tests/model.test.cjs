@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const {
   createInitialData, emptyData, exerciseVolume, formatVolume, loadData,
   localDate, parseImport, previousExercise, saveData, STORAGE_KEY,
-  workoutSetCount, workoutVolume, EXERCISES, exerciseDefinitions, resolveExercise, normalizeNickname,
+  workoutSetCount, workoutVolume, EXERCISES, exerciseDefinitions, resolveExercise, normalizeNickname, setStages, setVolume,
 } = require('../miniprogram/utils/model.js')
 
 function fixture() {
@@ -72,7 +72,7 @@ describe('backup validation', () => {
 
   const invalidExamples = [
     ['invalid JSON', '{'],
-    ['unsupported version', JSON.stringify({ ...data(), version: 2 })],
+    ['unsupported version', JSON.stringify({ ...data(), version: 3 })],
     ['bad schema', JSON.stringify({ ...data(), workouts: null })],
     ['prototype keys', '{"version":1,"__proto__":{},"workouts":[],"activeWorkout":null,"restSeconds":90,"demo":false}'],
     ['negative timer', JSON.stringify({ ...data(), restSeconds: -1 })],
@@ -313,6 +313,204 @@ describe('personal nickname and compatible profile backups', () => {
     for (const nickname of [null, 3, {}, [], '太'.repeat(21), '小李\n', '小李\u007f']) {
       assert.throws(() => parseImport(JSON.stringify({ ...data(), nickname })), /昵称/)
     }
+  })
+})
+
+describe('drop sets preserve one group with multiple weighted stages', () => {
+  function dropSet(completed = true) {
+    return {
+      id: 'drop-parent', weight: 7.5, reps: 12, completed,
+      drops: [{ id: 'drop-a', weight: 5, reps: 10 }, { id: 'drop-b', weight: 2.5, reps: 8 }],
+    }
+  }
+
+  function dropData() {
+    const source = data()
+    source.version = 2
+    source.workouts[0].exercises = [{ id: 'row', exerciseId: 'lateral-raise', sets: [dropSet()] }]
+    return source
+  }
+
+  it('records 7.5×12 → 5×10 → 2.5×8 as one completed group, 30 repetitions, and 160 kg of volume', () => {
+    const source = dropData()
+    const set = source.workouts[0].exercises[0].sets[0]
+    assert.deepEqual(setStages(set), [
+      { id: 'drop-parent', weight: 7.5, reps: 12 },
+      { id: 'drop-a', weight: 5, reps: 10 },
+      { id: 'drop-b', weight: 2.5, reps: 8 },
+    ])
+    assert.equal(setStages(set).reduce((total, stage) => total + stage.reps, 0), 30)
+    assert.equal(setVolume(set), 160)
+    assert.equal(exerciseVolume(source.workouts[0].exercises[0]), 160)
+    assert.equal(workoutVolume(source.workouts[0]), 160)
+    assert.equal(workoutSetCount(source.workouts[0]), 1)
+    assert.deepEqual(parseImport(JSON.stringify(source)), source)
+  })
+
+  it('excludes every stage of an unfinished parent from workout totals while exposing its raw volume', () => {
+    const source = dropData()
+    const set = source.workouts[0].exercises[0].sets[0]
+    set.completed = false
+    assert.equal(setVolume(set), 160)
+    assert.equal(workoutVolume(source.workouts[0]), 0)
+    assert.equal(workoutSetCount(source.workouts[0]), 0)
+    assert.deepEqual(parseImport(JSON.stringify(source)), source)
+  })
+
+  it('combines normal and drop sets without multiplying dumbbell weight or counting stages as groups', () => {
+    const source = dropData()
+    source.workouts[0].exercises[0].sets.push(
+      { id: 'normal-completed', weight: 10, reps: 8, completed: true },
+      { id: 'normal-incomplete', weight: 15, reps: 12, completed: false },
+    )
+    assert.equal(workoutVolume(source.workouts[0]), 240)
+    assert.equal(workoutSetCount(source.workouts[0]), 2)
+    assert.equal(setVolume(source.workouts[0].exercises[0].sets[1]), 80)
+  })
+
+  it('keeps ordinary historical set shapes unchanged and returns independent flat stage objects', () => {
+    const legacy = data()
+    const before = JSON.stringify(legacy)
+    assert.deepEqual(parseImport(before), legacy)
+    assert.equal(Object.prototype.hasOwnProperty.call(parseImport(before).workouts[0].exercises[0].sets[0], 'drops'), false)
+    const normal = legacy.workouts[0].exercises[0].sets[0]
+    assert.deepEqual(setStages(normal), [{ id: 'set-1', weight: 40, reps: 10 }])
+    const set = dropSet()
+    const stages = setStages(set)
+    stages[0].weight = 100
+    stages[1].reps = 100
+    assert.equal(set.weight, 7.5)
+    assert.equal(set.drops[0].reps, 10)
+    assert.equal(JSON.stringify(legacy), before)
+  })
+
+  it('round-trips custom exercise drop sets and unfinished drafts with nickname through storage and JSON', () => {
+    const source = dropData()
+    source.nickname = '小李💪'
+    source.customExercises.push({ id: 'custom-dumbbell-drop', name: '坐姿哑铃侧平举', muscle: '肩部', kind: 'weighted' })
+    source.workouts[0].exercises[0].exerciseId = 'custom-dumbbell-drop'
+    source.activeWorkout = {
+      id: 'drop-draft', date: '2026-10-27', title: '肩部训练', notes: '递减组还没完成', durationMinutes: 12,
+      exercises: [{ id: 'drop-draft-exercise', exerciseId: 'custom-dumbbell-drop', sets: [{
+        id: 'draft-parent', weight: 7.5, reps: 12, completed: false,
+        drops: [{ id: 'draft-a', weight: 5, reps: 10 }, { id: 'draft-b', weight: 2.5, reps: 8 }],
+      }] }],
+    }
+    assert.deepEqual(parseImport(JSON.stringify(source)), source)
+    let stored
+    assert.equal(saveData(source, { setItem: (key, value) => { assert.equal(key, 'lianji.fitness.v1'); stored = value } }), true)
+    const restored = loadData({ getItem: () => stored })
+    assert.deepEqual(restored, source)
+    assert.equal(workoutVolume(restored.workouts[0], restored.customExercises), 160)
+    assert.equal(workoutVolume(restored.activeWorkout, restored.customExercises), 0)
+    assert.equal(setVolume(restored.activeWorkout.exercises[0].sets[0]), 160)
+  })
+
+  it('accepts ten total stages and the same weight and repetition boundaries as ordinary sets', () => {
+    const source = dropData()
+    const set = source.workouts[0].exercises[0].sets[0]
+    set.drops = Array.from({ length: 9 }, (_, index) => ({ id: `limit-drop-${index}`, weight: index % 2 ? 0 : 2000, reps: index % 2 ? 1 : 1000 }))
+    const restored = parseImport(JSON.stringify(source))
+    assert.equal(setStages(restored.workouts[0].exercises[0].sets[0]).length, 10)
+    assert.equal(workoutSetCount(restored.workouts[0]), 1)
+  })
+
+  it('rejects empty, excessive, malformed, or nested additional stages instead of discarding them', () => {
+    const invalidDrops = [
+      [], null, {}, '5kg×10', [null], [5], [{}],
+      Array.from({ length: 10 }, (_, index) => ({ id: `too-many-${index}`, weight: 5, reps: 10 })),
+      [{ id: 'nested-a', weight: 5, reps: 10, drops: [] }],
+      [{ id: 'nested-b', weight: 5, reps: 10, drops: null }],
+      [{ id: 'nested-c', weight: 5, reps: 10, drops: [{ id: 'nested-d', weight: 2.5, reps: 8 }] }],
+    ]
+    for (const drops of invalidDrops) {
+      const source = dropData()
+      source.workouts[0].exercises[0].sets[0].drops = drops
+      assert.throws(() => parseImport(JSON.stringify(source)), /无法导入/)
+    }
+  })
+
+  it('rejects stage IDs duplicated by another stage, parent set, exercise, workout, or later set', () => {
+    for (const duplicate of ['drop-b', 'drop-parent', 'row', 'workout', 'later-set']) {
+      const source = dropData()
+      source.workouts[0].exercises[0].sets[0].drops[0].id = duplicate
+      source.workouts[0].exercises[0].sets.push({ id: 'later-set', weight: 5, reps: 10, completed: true })
+      assert.throws(() => parseImport(JSON.stringify(source)), /重复/)
+    }
+    const source = dropData()
+    source.activeWorkout = { id: 'drop-a', date: '2026-10-27', title: '草稿', notes: '', durationMinutes: 0, exercises: [] }
+    assert.throws(() => parseImport(JSON.stringify(source)), /重复/)
+  })
+
+  it('rejects additional stages on built-in and custom bodyweight movements even when all stage weights are zero', () => {
+    for (const custom of [false, true]) {
+      const source = dropData()
+      if (custom) source.customExercises.push({ id: 'custom-selfweight-drop', name: '靠墙倒立撑', muscle: '肩部', kind: 'bodyweight' })
+      const exercise = source.workouts[0].exercises[0]
+      exercise.exerciseId = custom ? 'custom-selfweight-drop' : 'pull-up'
+      exercise.sets[0].weight = 0
+      exercise.sets[0].drops.forEach((stage) => { stage.weight = 0 })
+      assert.throws(() => parseImport(JSON.stringify(source)), /自重动作不能使用递减组/)
+    }
+  })
+
+  it('validates stage IDs and numeric values without coercing strings or fractional repetition counts', () => {
+    const invalidStages = [
+      { id: '', weight: 5, reps: 10 },
+      { id: 12, weight: 5, reps: 10 },
+      { id: 'invalid', weight: -1, reps: 10 },
+      { id: 'invalid', weight: 2000.1, reps: 10 },
+      { id: 'invalid', weight: '5', reps: 10 },
+      { id: 'invalid', weight: Infinity, reps: 10 },
+      { id: 'invalid', weight: 5, reps: 0 },
+      { id: 'invalid', weight: 5, reps: 1001 },
+      { id: 'invalid', weight: 5, reps: 8.5 },
+      { id: 'invalid', weight: 5, reps: '10' },
+      { id: 'invalid', weight: 5, reps: null },
+    ]
+    for (const stage of invalidStages) {
+      const source = dropData()
+      source.workouts[0].exercises[0].sets[0].drops = [stage]
+      assert.throws(() => parseImport(JSON.stringify(source)), /无法导入/)
+    }
+  })
+
+  it('upgrades incoming version-1 records with historical or active drop sets to protected format 2', () => {
+    const historical = { ...dropData(), version: 1 }
+    assert.deepEqual(parseImport(JSON.stringify(historical)), { ...historical, version: 2 })
+    const active = {
+      ...emptyData(),
+      activeWorkout: { ...historical.workouts[0], id: 'active-format-guard' },
+    }
+    assert.deepEqual(parseImport(JSON.stringify(active)), { ...active, version: 2 })
+    assert.equal(historical.version, 1)
+    assert.equal(active.version, 1)
+  })
+
+  it('retains format 2 after the last drop stage is removed and keeps ordinary backups on format 1', () => {
+    const protectedData = { ...data(), version: 2 }
+    assert.deepEqual(parseImport(JSON.stringify(protectedData)), protectedData)
+    assert.deepEqual(parseImport(JSON.stringify(data())), data())
+    assert.equal(emptyData().version, 1)
+    assert.equal(createInitialData().version, 1)
+    let stored
+    assert.equal(saveData(protectedData, { setItem: (_, value) => { stored = value } }), true)
+    assert.equal(JSON.parse(stored).version, 2)
+    assert.equal(saveData(data(), { setItem: (_, value) => { stored = value } }), true)
+    assert.equal(JSON.parse(stored).version, 1)
+  })
+
+  it('protects raw version-1 drop records on save without mutating caller data or changing the storage key', () => {
+    const source = { ...dropData(), version: 1 }
+    const snapshot = JSON.stringify(source)
+    let savedKey
+    let stored
+    assert.equal(saveData(source, { setItem: (key, value) => { savedKey = key; stored = value } }), true)
+    assert.equal(savedKey, 'lianji.fitness.v1')
+    assert.equal(JSON.parse(stored).version, 2)
+    assert.deepEqual(parseImport(stored), { ...source, version: 2 })
+    assert.equal(JSON.stringify(source), snapshot)
+    assert.equal(source.version, 1)
   })
 })
 

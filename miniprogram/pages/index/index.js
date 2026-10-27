@@ -28,7 +28,18 @@ function decorateWorkout(workout, customExercises = []) {
       name: definition.name,
       muscle: definition.muscle,
       kind: definition.kind,
-      sets: exercise.sets.map((set, index) => ({ ...set, index: index + 1 }))
+      sets: exercise.sets.map((set, index) => {
+        const stages = model.setStages(set);
+        return {
+          ...set,
+          index: index + 1,
+          isDrop: stages.length > 1,
+          stageCount: stages.length,
+          totalReps: stages.reduce((total, stage) => total + stage.reps, 0),
+          stages: stages.map((stage, stageIndex) => ({ ...stage, index: stageIndex + 1 })),
+          drops: (set.drops || []).map((drop, dropIndex) => ({ ...drop, index: dropIndex + 2 }))
+        };
+      })
     };
   });
   const date = dateFromKey(workout.date);
@@ -104,7 +115,8 @@ function buildView(store, selectedDate, monthKey, selectedMuscle) {
     const previous = model.previousExercise(store.workouts, exercise.exerciseId);
     const completed = previous ? previous.sets.filter((set) => set.completed) : [];
     const best = completed.reduce((result, set) => !result || set.weight > result.weight || set.weight === result.weight && set.reps > result.reps ? set : result, null);
-    exercise.previousLabel = best ? `上次参考 · ${exercise.kind === 'bodyweight' ? '自重' : `${best.weight} kg`} × ${best.reps} 次` : '第一次记录，从这一组开始';
+    const reference = best ? model.setStages(best).map((stage) => `${exercise.kind === 'bodyweight' ? '自重' : `${stage.weight} kg`} × ${stage.reps} 次`).join(' → ') : '';
+    exercise.previousLabel = best ? `上次参考 · ${reference}${best.drops ? '（递减组）' : ''}` : '第一次记录，从这一组开始';
   });
   const options = definitions.filter((exercise) => exercise.muscle === selectedMuscle).map((exercise) => ({
     ...exercise,
@@ -160,7 +172,7 @@ function inputNumber(raw, field) {
   return Number.isFinite(value) && value >= minimum && value <= maximum && (field === 'weight' || Number.isInteger(value)) ? value : null;
 }
 
-const draftKey = (exerciseId, setId, field) => JSON.stringify([exerciseId, setId, field]);
+const draftKey = (exerciseId, setId, field, dropId = '') => JSON.stringify([exerciseId, setId, field, dropId]);
 
 Page({
   data: {
@@ -273,6 +285,10 @@ Page({
           const key = draftKey(exercise.id, set.id, field);
           if (Object.prototype.hasOwnProperty.call(this._setDrafts, key)) set[field] = this._setDrafts[key];
         });
+        set.drops.forEach((drop) => ['weight', 'reps'].forEach((field) => {
+          const key = draftKey(exercise.id, set.id, field, drop.id);
+          if (Object.prototype.hasOwnProperty.call(this._setDrafts, key)) drop[field] = this._setDrafts[key];
+        }));
       }));
     } else this._setDrafts = Object.create(null);
     this.setData(view);
@@ -323,6 +339,14 @@ Page({
     return Math.min(1440, Math.max(0, Math.round((this._durationBase || 0) + elapsed)));
   },
 
+  _cloneSet(source, kind = 'weighted') {
+    const set = { id: model.uid(), weight: kind === 'bodyweight' ? 0 : source.weight, reps: source.reps, completed: false };
+    if (kind === 'weighted' && source.drops && source.drops.length) {
+      set.drops = source.drops.map((drop) => ({ id: model.uid(), weight: drop.weight, reps: drop.reps }));
+    }
+    return set;
+  },
+
   _makeExercise(definition) {
     const previous = model.previousExercise(this._store.workouts, definition.id);
     const lastSets = previous && previous.sets.filter((set) => set.completed);
@@ -330,7 +354,7 @@ Page({
     return {
       id: model.uid(),
       exerciseId: definition.id,
-      sets: sets.map((set) => ({ id: model.uid(), weight: definition.kind === 'bodyweight' ? 0 : set.weight, reps: set.reps, completed: false }))
+      sets: sets.map((set) => this._cloneSet(set, definition.kind))
     };
   },
 
@@ -507,7 +531,33 @@ Page({
     if (!exercise) return;
     if (exercise.sets.length >= 30) return toast('每个动作最多记录 30 组');
     const previous = exercise.sets[exercise.sets.length - 1];
-    exercise.sets.push({ id: model.uid(), weight: previous ? previous.weight : 0, reps: previous ? previous.reps : 10, completed: false });
+    const definition = model.resolveExercise(exercise.exerciseId, this._store.customExercises);
+    exercise.sets.push(this._cloneSet(previous || { weight: 0, reps: 10 }, definition.kind));
+    this._commit();
+  },
+
+  addDropStage(event) {
+    const exercise = this._findExercise(event.currentTarget.dataset.exercise);
+    const set = exercise && exercise.sets.find((item) => item.id === event.currentTarget.dataset.set);
+    if (!set) return;
+    if (model.resolveExercise(exercise.exerciseId, this._store.customExercises).kind !== 'weighted') return toast('递减组用于负重动作');
+    const drops = set.drops || [];
+    if (drops.length >= 9) return toast('一个递减组最多记录 10 段');
+    const previous = drops[drops.length - 1] || set;
+    set.drops = [...drops, { id: model.uid(), weight: previous.weight, reps: previous.reps }];
+    this._store.version = 2;
+    set.completed = false;
+    this._commit();
+  },
+
+  removeDropStage(event) {
+    const { exercise: exerciseId, set: setId, drop: dropId } = event.currentTarget.dataset;
+    const exercise = this._findExercise(exerciseId);
+    const set = exercise && exercise.sets.find((item) => item.id === setId);
+    if (!set || !set.drops || !set.drops.some((drop) => drop.id === dropId)) return;
+    set.drops = set.drops.filter((drop) => drop.id !== dropId);
+    if (!set.drops.length) delete set.drops;
+    ['weight', 'reps'].forEach((field) => { delete this._setDrafts[draftKey(exerciseId, setId, field, dropId)]; });
     this._commit();
   },
 
@@ -526,13 +576,14 @@ Page({
   },
 
   changeSet(event) {
-    const { exercise: exerciseId, set: setId, field } = event.currentTarget.dataset;
+    const { exercise: exerciseId, set: setId, field, drop: dropId } = event.currentTarget.dataset;
     const exercise = this._findExercise(exerciseId);
-    const set = exercise && exercise.sets.find((item) => item.id === setId);
+    const parent = exercise && exercise.sets.find((item) => item.id === setId);
+    const set = parent && (dropId ? (parent.drops || []).find((drop) => drop.id === dropId) : parent);
     if (!set || !['weight', 'reps'].includes(field)) return;
     if (field === 'weight' && model.resolveExercise(exercise.exerciseId, this._store.customExercises)?.kind === 'bodyweight') return;
     const raw = String(event.detail.value);
-    this._setDrafts[draftKey(exerciseId, setId, field)] = raw;
+    this._setDrafts[draftKey(exerciseId, setId, field, dropId)] = raw;
     const value = inputNumber(raw, field);
     if (value === null) {
       this._refresh();
@@ -549,9 +600,9 @@ Page({
       this._refresh();
       return;
     }
-    const { exercise: exerciseId, set: setId, field } = dataset;
+    const { exercise: exerciseId, set: setId, field, drop: dropId } = dataset;
     if (!['weight', 'reps'].includes(field)) return;
-    const key = draftKey(exerciseId, setId, field);
+    const key = draftKey(exerciseId, setId, field, dropId);
     const raw = this._setDrafts[key];
     delete this._setDrafts[key];
     if (raw !== undefined && raw.trim() && inputNumber(raw, field) === null) {

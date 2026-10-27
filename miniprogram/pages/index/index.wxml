@@ -36,8 +36,25 @@
         <view class="exercise-card" wx:for="{{active.exercises}}" wx:for-item="exercise" wx:key="id">
           <view class="exercise-head"><view class="exercise-number">{{index + 1}}</view><view class="exercise-name-block"><view class="exercise-title-row"><text class="exercise-name">{{exercise.name}}</text><button size="mini" class="ui-button rename-exercise" data-exercise="{{exercise.id}}" bindtap="startRenameExercise" aria-label="修改{{exercise.name}}的名称">改名</button></view><text class="previous-label">{{exercise.previousLabel}}</text></view><view class="muscle-tag">{{exercise.muscle}}</view></view>
           <view class="set-table-head"><text class="set-index-col">组</text><text class="set-weight-col">{{exercise.kind === 'bodyweight' ? '自重 / kg' : '重量 / kg'}}</text><text class="set-reps-col">次数</text><text class="set-done-col">完成</text><text class="set-remove-col"></text></view>
-          <view class="set-row {{set.completed ? 'set-completed' : ''}}" wx:for="{{exercise.sets}}" wx:for-item="set" wx:for-index="setIndex" wx:key="id">
-            <text class="set-index-col set-number">{{setIndex + 1}}</text><view class="set-weight-col"><input class="set-input" type="digit" value="{{set.weight}}" data-exercise="{{exercise.id}}" data-set="{{set.id}}" data-field="weight" bindinput="changeSet" bindblur="normalizeSet" disabled="{{exercise.kind === 'bodyweight'}}" aria-label="{{exercise.name}} 第{{setIndex + 1}}组重量" /></view><view class="set-reps-col"><input class="set-input" type="number" value="{{set.reps}}" data-exercise="{{exercise.id}}" data-set="{{set.id}}" data-field="reps" bindinput="changeSet" bindblur="normalizeSet" aria-label="{{exercise.name}} 第{{setIndex + 1}}组次数" /></view><view class="set-done-col"><button size="mini" class="ui-button set-check {{set.completed ? 'checked' : ''}}" data-exercise="{{exercise.id}}" data-set="{{set.id}}" bindtap="toggleSet" aria-label="{{set.completed ? '取消完成' : '完成这一组'}}"><image src="/assets/icons/check-white.svg" wx:if="{{set.completed}}" class="tiny-icon" /></button></view><view class="set-remove-col"><button size="mini" class="ui-button remove-set" data-exercise="{{exercise.id}}" data-set="{{set.id}}" bindtap="removeSet" aria-label="删除这一组">×</button></view>
+          <view class="set-group {{set.isDrop ? 'is-drop-set' : ''}} {{set.completed ? 'group-completed' : ''}}" wx:for="{{exercise.sets}}" wx:for-item="set" wx:for-index="setIndex" wx:key="id">
+            <view class="set-row {{set.completed ? 'set-completed' : ''}}">
+              <text class="set-index-col set-number">{{setIndex + 1}}</text>
+              <view class="set-weight-col"><input class="set-input" type="digit" value="{{set.weight}}" data-exercise="{{exercise.id}}" data-set="{{set.id}}" data-field="weight" bindinput="changeSet" bindblur="normalizeSet" disabled="{{exercise.kind === 'bodyweight'}}" aria-label="{{exercise.name}} 第{{setIndex + 1}}组重量" /></view>
+              <view class="set-reps-col"><input class="set-input" type="number" value="{{set.reps}}" data-exercise="{{exercise.id}}" data-set="{{set.id}}" data-field="reps" bindinput="changeSet" bindblur="normalizeSet" aria-label="{{exercise.name}} 第{{setIndex + 1}}组次数" /></view>
+              <view class="set-done-col"><button size="mini" class="ui-button set-check {{set.completed ? 'checked' : ''}}" data-exercise="{{exercise.id}}" data-set="{{set.id}}" bindtap="toggleSet" aria-label="{{set.completed ? '取消完成整组' : '完成这一组'}}"><image src="/assets/icons/check-white.svg" wx:if="{{set.completed}}" class="tiny-icon" /></button></view>
+              <view class="set-remove-col"><button size="mini" class="ui-button remove-set" data-exercise="{{exercise.id}}" data-set="{{set.id}}" bindtap="removeSet" aria-label="删除这一组">×</button></view>
+            </view>
+            <view class="drop-stage-row" wx:for="{{set.drops}}" wx:for-item="drop" wx:key="id">
+              <text class="set-index-col drop-stage-label">{{drop.index}}段</text>
+              <view class="set-weight-col"><input class="set-input" type="digit" value="{{drop.weight}}" data-exercise="{{exercise.id}}" data-set="{{set.id}}" data-drop="{{drop.id}}" data-field="weight" bindinput="changeSet" bindblur="normalizeSet" aria-label="{{exercise.name}} 第{{setIndex + 1}}组第{{drop.index}}段重量" /></view>
+              <view class="set-reps-col"><input class="set-input" type="number" value="{{drop.reps}}" data-exercise="{{exercise.id}}" data-set="{{set.id}}" data-drop="{{drop.id}}" data-field="reps" bindinput="changeSet" bindblur="normalizeSet" aria-label="{{exercise.name}} 第{{setIndex + 1}}组第{{drop.index}}段次数" /></view>
+              <view class="set-done-col"><text class="drop-stage-link">↓</text></view>
+              <view class="set-remove-col"><button size="mini" class="ui-button remove-drop-stage" data-exercise="{{exercise.id}}" data-set="{{set.id}}" data-drop="{{drop.id}}" bindtap="removeDropStage" aria-label="删除第{{drop.index}}段递减">×</button></view>
+            </view>
+            <view wx:if="{{exercise.kind === 'weighted'}}" class="set-group-footer">
+              <text wx:if="{{set.isDrop}}" class="drop-set-info">递减组 · {{set.stageCount}}段 · {{set.totalReps}}次 · 计1组</text>
+              <button size="mini" class="ui-button add-drop-stage" data-exercise="{{exercise.id}}" data-set="{{set.id}}" bindtap="addDropStage" disabled="{{set.stageCount >= 10}}">＋ 接递减</button>
+            </view>
           </view>
           <button size="mini" class="ui-button add-set-button" data-exercise="{{exercise.id}}" bindtap="addSet"><text>＋</text> 沿用上一组</button>
         </view>
@@ -75,7 +92,7 @@
       <view class="content-card nickname-card"><button size="mini" class="ui-button settings-row nickname-settings-row" bindtap="openNickname"><view class="settings-row-icon"><image src="/assets/icons/user.svg" class="icon" /></view><view><text class="settings-row-title">我的昵称</text><text class="settings-row-sub">{{displayName}} · 点此修改首页称呼</text></view><text class="row-chevron">›</text></button></view>
       <view wx:if="{{demo}}" class="demo-banner"><view class="demo-banner-icon">✦</view><view><text class="demo-banner-title">先逛一逛，再开始你的记录</text><text class="demo-banner-text">当前为示例数据，用来展示记录和图表效果。
 清空示例后，就可以建立属于你的训练日记。</text></view><button size="mini" class="ui-button small-primary-button" bindtap="clearDemo">清空示例</button></view>
-      <view class="content-card data-card"><view class="section-header"><view><text class="section-title">数据与备份</text><text class="section-subtitle">定期备份，让每次进步都安心留存</text></view></view><button size="mini" class="ui-button settings-row" bindtap="exportData"><view class="settings-row-icon"><image src="/assets/icons/download.svg" class="icon" /></view><view><text class="settings-row-title">导出训练记录</text><text class="settings-row-sub">复制 JSON 备份，保存到你信任的位置</text></view><text class="row-chevron">›</text></button><button size="mini" class="ui-button settings-row" bindtap="openImport"><view class="settings-row-icon"><image src="/assets/icons/upload.svg" class="icon" /></view><view><text class="settings-row-title">恢复备份</text><text class="settings-row-sub">粘贴之前导出的 JSON 训练记录</text></view><text class="row-chevron">›</text></button></view><view class="privacy-note"><image src="/assets/icons/lock.svg" class="icon" /><view><text>关于你的数据</text><text>本版记录仅保存在当前设备，不会自动上传或跨设备同步。卸载小程序或清理微信数据可能丢失记录，请记得导出备份。</text></view></view><view class="settings-footer"><text class="footer-brand">练记 LIFTLOG</text><text>把每一次努力，练成更好的自己。</text><text class="version-text">v1.2 · 为认真训练的你而做</text></view>
+      <view class="content-card data-card"><view class="section-header"><view><text class="section-title">数据与备份</text><text class="section-subtitle">定期备份，让每次进步都安心留存</text></view></view><button size="mini" class="ui-button settings-row" bindtap="exportData"><view class="settings-row-icon"><image src="/assets/icons/download.svg" class="icon" /></view><view><text class="settings-row-title">导出训练记录</text><text class="settings-row-sub">复制 JSON 备份，保存到你信任的位置</text></view><text class="row-chevron">›</text></button><button size="mini" class="ui-button settings-row" bindtap="openImport"><view class="settings-row-icon"><image src="/assets/icons/upload.svg" class="icon" /></view><view><text class="settings-row-title">恢复备份</text><text class="settings-row-sub">粘贴之前导出的 JSON 训练记录</text></view><text class="row-chevron">›</text></button></view><view class="privacy-note"><image src="/assets/icons/lock.svg" class="icon" /><view><text>关于你的数据</text><text>本版记录仅保存在当前设备，不会自动上传或跨设备同步。卸载小程序或清理微信数据可能丢失记录，请记得导出备份。</text></view></view><view class="settings-footer"><text class="footer-brand">练记 LIFTLOG</text><text>把每一次努力，练成更好的自己。</text><text class="version-text">v1.3 · 为认真训练的你而做</text></view>
     </view>
 
     <view class="page-footer"><text>一点一点，成为更好的自己。</text><text>LIFTLOG · 记录每一次认真</text></view>
@@ -115,7 +132,28 @@
       <text wx:if="{{nicknameError}}" class="editor-error nickname-error" role="alert">{{nicknameError}}</text>
       <button size="mini" class="ui-button primary-button sheet-primary nickname-save-button" bindtap="saveNickname">保存昵称</button>
     </view>
-    <scroll-view wx:elif="{{sheet === 'detail'}}" scroll-y class="detail-content"><view class="detail-title-row"><text class="detail-title">{{detail.title}}</text><view class="metric-pill">{{detail.durationMinutes}} 分钟</view></view><view class="record-summary"><view><text class="record-value">{{detail.exerciseCount}}</text><text>个动作</text></view><view><text class="record-value">{{detail.setCount}}</text><text>组已完成</text></view><view><text class="record-value">{{detail.volumeLabel}}</text><text>kg 训练量</text></view></view><view class="detail-exercise" wx:for="{{detail.exercises}}" wx:for-item="exercise" wx:key="id"><text class="exercise-name">{{exercise.name}}</text><view class="detail-sets"><view class="detail-set" wx:for="{{exercise.sets}}" wx:for-item="set" wx:for-index="setIndex" wx:key="id"><text class="detail-set-index">{{setIndex + 1}}</text><text>{{exercise.kind === 'bodyweight' ? '自重' : set.weight + ' kg'}} <text class="detail-times">×</text> {{set.reps}} 次</text><text class="detail-set-status">{{set.completed ? '✓ 完成' : '未完成'}}</text></view></view></view><view wx:if="{{detail.notes}}" class="detail-note"><text class="rest-title">训练手记</text><text>{{detail.notes}}</text></view><button size="mini" class="ui-button delete-workout-button" data-id="{{detail.id}}" bindtap="deleteWorkout"><image src="/assets/icons/trash.svg" class="icon" />删除这条记录</button></scroll-view>
+    <scroll-view wx:elif="{{sheet === 'detail'}}" scroll-y class="detail-content">
+      <view class="detail-title-row"><text class="detail-title">{{detail.title}}</text><view class="metric-pill">{{detail.durationMinutes}} 分钟</view></view>
+      <view class="record-summary"><view><text class="record-value">{{detail.exerciseCount}}</text><text>个动作</text></view><view><text class="record-value">{{detail.setCount}}</text><text>组已完成</text></view><view><text class="record-value">{{detail.volumeLabel}}</text><text>kg 训练量</text></view></view>
+      <view class="detail-exercise" wx:for="{{detail.exercises}}" wx:for-item="exercise" wx:key="id">
+        <text class="exercise-name">{{exercise.name}}</text>
+        <view class="detail-sets">
+          <view class="detail-set-group" wx:for="{{exercise.sets}}" wx:for-item="set" wx:for-index="setIndex" wx:key="id">
+            <view class="detail-set">
+              <text class="detail-set-index">{{setIndex + 1}}</text>
+              <view wx:if="{{set.isDrop}}" class="detail-drop-summary"><text class="drop-set-badge">递减组 · {{set.stageCount}}段</text><text>合计 {{set.totalReps}} 次 · 计 1 组</text></view>
+              <text wx:else>{{exercise.kind === 'bodyweight' ? '自重' : set.weight + ' kg'}} <text class="detail-times">×</text> {{set.reps}} 次</text>
+              <text class="detail-set-status">{{set.completed ? '✓ 完成' : '未完成'}}</text>
+            </view>
+            <view wx:if="{{set.isDrop}}" class="detail-drop-stages">
+              <view class="detail-drop-stage" wx:for="{{set.stages}}" wx:for-item="stage" wx:key="id"><text>第 {{stage.index}} 段</text><text>{{stage.weight}} kg <text class="detail-times">×</text> {{stage.reps}} 次</text></view>
+            </view>
+          </view>
+        </view>
+      </view>
+      <view wx:if="{{detail.notes}}" class="detail-note"><text class="rest-title">训练手记</text><text>{{detail.notes}}</text></view>
+      <button size="mini" class="ui-button delete-workout-button" data-id="{{detail.id}}" bindtap="deleteWorkout"><image src="/assets/icons/trash.svg" class="icon" />删除这条记录</button>
+    </scroll-view>
     <view wx:elif="{{sheet === 'import'}}" class="import-content"><textarea class="import-textarea" placeholder="在这里粘贴之前导出的 JSON 备份…" value="{{importText}}" bindinput="updateImport" maxlength="-1" aria-label="JSON 备份内容" /><view class="import-warning">恢复备份将替换当前记录，操作前请先做好备份。</view><button size="mini" class="ui-button primary-button sheet-primary" bindtap="confirmImport">检查并恢复备份</button></view>
   </view></view>
 </view>
