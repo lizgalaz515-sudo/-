@@ -46,8 +46,16 @@ function localDate(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
+function normalizeNickname(value) {
+  if (typeof value !== 'string') throw new Error('昵称必须是文字。')
+  if (/[\u0000-\u001f\u007f]/.test(value)) throw new Error('昵称不能包含换行或控制字符。')
+  const nickname = value.trim()
+  if (nickname.length > 20) throw new Error('昵称最多 20 个字符。')
+  return nickname
+}
+
 function emptyData() {
-  return { version: 1, workouts: [], activeWorkout: null, restSeconds: 90, demo: false, customExercises: [] }
+  return { version: 1, workouts: [], activeWorkout: null, restSeconds: 90, demo: false, customExercises: [], nickname: '' }
 }
 
 /** Demo workouts are explicitly marked and can be removed together before recording. */
@@ -82,7 +90,7 @@ function createInitialData(now = new Date()) {
       })),
     })
   })
-  return { version: 1, workouts, activeWorkout: null, restSeconds: 90, demo: true, customExercises: [] }
+  return { version: 1, workouts, activeWorkout: null, restSeconds: 90, demo: true, customExercises: [], nickname: '' }
 }
 
 function exerciseVolume(exercise, customExercises = []) {
@@ -224,6 +232,7 @@ function parseImport(source) {
     restSeconds: number(data.restSeconds, '休息时长', 0, 1800, true),
     demo: boolean(data.demo, '示例数据标识'),
     customExercises,
+    nickname: data.nickname === undefined ? '' : normalizeNickname(data.nickname),
   }
 }
 
@@ -265,4 +274,4 @@ function saveData(data, storage = defaultStorage()) {
   }
 }
 
-module.exports = { STORAGE_KEY, MUSCLE_GROUPS, EXERCISES, exerciseDefinitions, resolveExercise, uid, localDate, emptyData, createInitialData, exerciseVolume, workoutVolume, workoutSetCount, formatVolume, previousExercise, parseImport, loadData, saveData }
+module.exports = { STORAGE_KEY, MUSCLE_GROUPS, EXERCISES, exerciseDefinitions, resolveExercise, uid, localDate, normalizeNickname, emptyData, createInitialData, exerciseVolume, workoutVolume, workoutSetCount, formatVolume, previousExercise, parseImport, loadData, saveData }

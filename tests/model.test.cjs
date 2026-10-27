@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const {
   createInitialData, emptyData, exerciseVolume, formatVolume, loadData,
   localDate, parseImport, previousExercise, saveData, STORAGE_KEY,
-  workoutSetCount, workoutVolume, EXERCISES, exerciseDefinitions, resolveExercise,
+  workoutSetCount, workoutVolume, EXERCISES, exerciseDefinitions, resolveExercise, normalizeNickname,
 } = require('../miniprogram/utils/model.js')
 
 function fixture() {
@@ -148,9 +148,10 @@ describe('custom exercise catalogs and backward-compatible backups', () => {
       }],
     }
     delete legacy.customExercises
+    delete legacy.nickname
     const snapshot = JSON.stringify(legacy)
     const migrated = parseImport(snapshot)
-    assert.deepEqual(migrated, { ...legacy, customExercises: [] })
+    assert.deepEqual(migrated, { ...legacy, customExercises: [], nickname: '' })
     assert.deepEqual(migrated.workouts, legacy.workouts)
     assert.deepEqual(migrated.activeWorkout, legacy.activeWorkout)
     let usedKey
@@ -244,6 +245,74 @@ describe('custom exercise catalogs and backward-compatible backups', () => {
     const unknown = customData()
     unknown.customExercises.pop()
     assert.throws(() => parseImport(JSON.stringify(unknown)), /不支持的动作/)
+  })
+})
+
+describe('personal nickname and compatible profile backups', () => {
+  it('starts with an empty nickname and accepts trimmed Chinese, emoji, and punctuation', () => {
+    assert.equal(emptyData().nickname, '')
+    assert.equal(createInitialData().nickname, '')
+    assert.equal(normalizeNickname('  小李  '), '小李')
+    assert.equal(normalizeNickname('阿夏🏋️ · Lift!'), '阿夏🏋️ · Lift!')
+    assert.equal(normalizeNickname('今天练腿💪'), '今天练腿💪')
+    assert.equal(normalizeNickname(''), '')
+    assert.equal(normalizeNickname('　   '), '')
+  })
+
+  it('enforces 20 UTF-16 code units, matching the native input maxlength', () => {
+    assert.equal(normalizeNickname('练'.repeat(20)), '练'.repeat(20))
+    assert.equal(normalizeNickname('💪'.repeat(10)), '💪'.repeat(10))
+    assert.throws(() => normalizeNickname('练'.repeat(21)), /昵称最多 20/)
+    assert.throws(() => normalizeNickname('💪'.repeat(11)), /昵称最多 20/)
+  })
+
+  it('rejects nonstring shapes and every ASCII control character without silently removing them', () => {
+    for (const value of [null, undefined, 12, true, {}, [], ['小李']]) {
+      assert.throws(() => normalizeNickname(value), /昵称必须是文字/)
+    }
+    for (const code of [...Array.from({ length: 32 }, (_, index) => index), 127]) {
+      assert.throws(() => normalizeNickname(`昵称${String.fromCharCode(code)}`), /昵称不能包含/)
+    }
+    assert.throws(() => normalizeNickname('\n小李\n'), /昵称不能包含/)
+  })
+
+  it('round-trips nicknames through JSON backups and the existing local storage key', () => {
+    const source = data()
+    source.nickname = '小李💪'
+    source.customExercises.push({ id: 'custom-profile-row', name: '器械单侧划船', muscle: '背部', kind: 'weighted' })
+    source.activeWorkout = {
+      id: 'profile-draft', date: '2026-10-27', title: '背部训练', notes: '保留草稿', durationMinutes: 10,
+      exercises: [{ id: 'profile-exercise', exerciseId: 'custom-profile-row', sets: [{ id: 'profile-set', weight: 22.5, reps: 8, completed: false }] }],
+    }
+    assert.deepEqual(parseImport(JSON.stringify(source)), source)
+    let savedKey
+    let raw
+    assert.equal(saveData(source, { setItem: (key, value) => { savedKey = key; raw = value } }), true)
+    assert.equal(savedKey, 'lianji.fitness.v1')
+    assert.deepEqual(loadData({ getItem: (key) => key === savedKey ? raw : null }), source)
+    const reset = { ...source, nickname: normalizeNickname('  ') }
+    assert.deepEqual(parseImport(JSON.stringify(reset)), reset)
+  })
+
+  it('migrates backups from before nicknames while preserving existing custom catalogs and active sets', () => {
+    const legacy = data()
+    legacy.customExercises.push({ id: 'custom-old-row', name: '胸托划船', muscle: '背部', kind: 'weighted' })
+    legacy.activeWorkout = {
+      id: 'old-profile-draft', date: '2026-10-26', title: '背部训练', notes: '不能丢失', durationMinutes: 8,
+      exercises: [{ id: 'old-profile-exercise', exerciseId: 'custom-old-row', sets: [{ id: 'old-profile-set', weight: 17.5, reps: 12, completed: true }] }],
+    }
+    delete legacy.nickname
+    const snapshot = JSON.stringify(legacy)
+    assert.deepEqual(parseImport(snapshot), { ...legacy, nickname: '' })
+    assert.deepEqual(loadData({ getItem: () => snapshot }), { ...legacy, nickname: '' })
+    assert.equal(JSON.stringify(legacy), snapshot)
+  })
+
+  it('trims valid imported nicknames and rejects invalid backup profile values', () => {
+    assert.equal(parseImport(JSON.stringify({ ...data(), nickname: '  阿强💪  ' })).nickname, '阿强💪')
+    for (const nickname of [null, 3, {}, [], '太'.repeat(21), '小李\n', '小李\u007f']) {
+      assert.throws(() => parseImport(JSON.stringify({ ...data(), nickname })), /昵称/)
+    }
   })
 })
 

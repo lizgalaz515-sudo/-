@@ -48,6 +48,8 @@ function decorateWorkout(workout, customExercises = []) {
 function buildView(store, selectedDate, monthKey, selectedMuscle) {
   const definitions = model.exerciseDefinitions(store.customExercises);
   const names = new Map(definitions.map((exercise) => [exercise.id, exercise]));
+  const nickname = store.nickname || '';
+  const displayName = nickname || '训练者';
   const today = new Date();
   const todayDate = keyOf(today);
   const monday = addDays(dateFromKey(todayDate), -((today.getDay() + 6) % 7));
@@ -111,9 +113,11 @@ function buildView(store, selectedDate, monthKey, selectedMuscle) {
   }));
   return {
     demo: store.demo,
+    nickname,
+    displayName,
     todayDate,
     dateLabel: `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日 ${['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][today.getDay()]}`,
-    greeting: today.getHours() < 11 ? '早上好，训练者' : today.getHours() < 18 ? '下午好，训练者' : '晚上好，训练者',
+    greeting: `${today.getHours() < 11 ? '早上好' : today.getHours() < 18 ? '下午好' : '晚上好'}，${displayName}`,
     weekLabel: `${monday.getMonth() + 1}.${monday.getDate()} — ${addDays(monday, 6).getMonth() + 1}.${addDays(monday, 6).getDate()}`,
     summary: {
       weekWorkouts: weekly.length,
@@ -166,6 +170,10 @@ Page({
     active: null,
     detail: null,
     demo: false,
+    nickname: '',
+    displayName: '训练者',
+    nicknameDraft: '',
+    nicknameError: '',
     recoveryWarning: false,
     storageReadFailed: false,
     muscles: model.MUSCLE_GROUPS,
@@ -348,6 +356,34 @@ Page({
     this._refresh();
   },
 
+  openNickname() {
+    this.setData({ sheet: 'nickname', nicknameDraft: this._store.nickname || '', nicknameError: '' });
+  },
+
+  updateNickname(event) {
+    this.setData({ nicknameDraft: String(event.detail.value), nicknameError: '' });
+  },
+
+  saveNickname() {
+    let nickname;
+    try {
+      nickname = model.normalizeNickname(this.data.nicknameDraft);
+    } catch (error) {
+      this.setData({ nicknameError: error.message });
+      return;
+    }
+    const previous = this._store.nickname || '';
+    this._store.nickname = nickname;
+    if (!this._commit()) {
+      this._store.nickname = previous;
+      this._refresh();
+      this.setData({ nicknameError: '暂时无法保存，请确认本机记录可读取后重试' });
+      return;
+    }
+    this.setData({ sheet: '', nicknameDraft: nickname, nicknameError: '' });
+    toast(nickname ? '昵称已保存' : '已恢复默认称呼');
+  },
+
   startWorkout() {
     if (this._storageReadFailed) return toast('请先重试读取本机记录，原记录未被覆盖');
     if (this._store.activeWorkout) return this.openStart();
@@ -355,7 +391,8 @@ Page({
       confirm('开始自己的记录？', '示例数据会被清空，接下来只记录你自己的训练。当前画面是功能示例，不是你的历史成绩。', () => {
         if (!this._preserveRecovery()) return;
         const restSeconds = this._store.restSeconds;
-        this._store = { ...model.emptyData(), restSeconds };
+        const nickname = this._store.nickname || '';
+        this._store = { ...model.emptyData(), restSeconds, nickname };
         this.startWorkout();
       });
       return;
@@ -663,7 +700,9 @@ Page({
     confirm('清除全部示例记录？', '这会同时清空示例模式下新增的记录与进行中的训练。请先导出需要保留的数据。', () => {
       if (!this._preserveRecovery()) return;
       this.resetRest();
-      this._store = model.emptyData();
+      const nickname = this._store.nickname || '';
+      const restSeconds = this._store.restSeconds;
+      this._store = { ...model.emptyData(), nickname, restSeconds };
       this._startedAt = null;
       this._durationBase = 0;
       this.setData({ tab: 'today', sheet: '', detail: null, restSeconds: this._store.restSeconds });

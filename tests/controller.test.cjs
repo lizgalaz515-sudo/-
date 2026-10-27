@@ -525,3 +525,74 @@ test('a verified native read is used directly rather than replacing records with
   assert.equal(page.data.summary.totalWorkouts, 1);
   assert.deepEqual(page._store.workouts, real.workouts);
 });
+
+test('saving a nickname changes greetings while keeping workouts, active sets and custom exercises', () => {
+  const initial = model.emptyData();
+  initial.workouts.push(model.createInitialData().workouts[0]);
+  initial.customExercises.push({ id: 'custom-nickname-controller', name: '器械推肩', muscle: '肩部', kind: 'weighted' });
+  initial.activeWorkout = { id: 'nickname-active', date: model.localDate(), title: '肩部训练', notes: '保留备注', durationMinutes: 7, exercises: [{ id: 'nickname-exercise', exerciseId: 'custom-nickname-controller', sets: [{ id: 'nickname-set', weight: 22.5, reps: 8, completed: true }] }] };
+  const { page, saved } = launch(initial);
+  page.openNickname();
+  assert.equal(page.data.sheet, 'nickname');
+  page.updateNickname(event({}, '  阿衡  '));
+  page.saveNickname();
+  assert.equal(page.data.sheet, '');
+  assert.match(page.data.greeting, /，阿衡$/);
+  assert.equal(saved().nickname, '阿衡');
+  assert.deepEqual(saved().workouts, initial.workouts);
+  assert.deepEqual(saved().activeWorkout, initial.activeWorkout);
+  assert.deepEqual(saved().customExercises, initial.customExercises);
+});
+
+test('invalid nickname input never enters persisted records and an empty name restores the default', () => {
+  const initial = { ...model.emptyData(), nickname: '阿衡' };
+  const { page, saved } = launch(initial);
+  page.openNickname();
+  page.updateNickname(event({}, '太'.repeat(21)));
+  page.saveNickname();
+  assert.match(page.data.nicknameError, /20/);
+  assert.equal(page._store.nickname, '阿衡');
+  assert.equal(saved(), undefined);
+  page.updateNickname(event({}, '   '));
+  page.saveNickname();
+  assert.equal(saved().nickname, '');
+  assert.match(page.data.greeting, /，训练者$/);
+});
+
+test('clearing samples or starting personal records retains the nickname and rest preference', () => {
+  for (const action of ['clearDemo', 'startWorkout']) {
+    const initial = { ...model.createInitialData(), nickname: '训练小周', restSeconds: 120 };
+    const { page, saved } = launch(initial);
+    page[action]();
+    assert.equal(saved().nickname, '训练小周');
+    assert.equal(saved().restSeconds, 120);
+    assert.equal(saved().demo, false);
+    assert.equal(saved().workouts.length, 0);
+    assert.equal(Boolean(saved().activeWorkout), action === 'startWorkout');
+    assert.match(page.data.greeting, /训练小周/);
+    assert.doesNotThrow(() => model.parseImport(JSON.stringify(saved())));
+  }
+});
+
+test('a failed nickname save keeps the previous name and leaves the editor open for retry', () => {
+  const { page, toasts } = launch({ ...model.emptyData(), nickname: '原来的称呼' }, { storageFails: true });
+  page.openNickname();
+  page.updateNickname(event({}, '新称呼'));
+  page.saveNickname();
+  assert.equal(page._store.nickname, '原来的称呼');
+  assert.equal(page.data.nickname, '原来的称呼');
+  assert.equal(page.data.sheet, 'nickname');
+  assert.match(page.data.nicknameError, /无法保存/);
+  assert.match(toasts.at(-1), /保存失败/);
+});
+
+test('unreadable storage blocks profile writes as well as workout writes', () => {
+  const { page, saved } = launch({ ...model.emptyData(), nickname: '原来的称呼' }, { readFails: true });
+  page.openNickname();
+  page.updateNickname(event({}, '新称呼'));
+  page.saveNickname();
+  assert.equal(saved(), undefined);
+  assert.equal(page._store.nickname, '原来的称呼');
+  assert.equal(page.data.sheet, 'nickname');
+  assert.match(page.data.nicknameError, /无法保存/);
+});
