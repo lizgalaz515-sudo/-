@@ -17,6 +17,7 @@ const EXERCISES = [
   { id: 'cable-fly', name: '绳索夹胸', muscle: '胸部', kind: 'weighted' },
   { id: 'push-up', name: '俯卧撑', muscle: '胸部', kind: 'bodyweight' },
   { id: 'shoulder-press', name: '哑铃推肩', muscle: '肩部', kind: 'weighted' },
+  { id: 'barbell-shoulder-press', name: '杠铃推肩', muscle: '肩部', kind: 'weighted' },
   { id: 'lateral-raise', name: '哑铃侧平举', muscle: '肩部', kind: 'weighted' },
   { id: 'face-pull', name: '绳索面拉', muscle: '肩部', kind: 'weighted' },
   { id: 'biceps-curl', name: '哑铃弯举', muscle: '手臂', kind: 'weighted' },
@@ -26,6 +27,14 @@ const EXERCISES = [
   { id: 'hanging-leg-raise', name: '悬垂举腿', muscle: '核心', kind: 'bodyweight' },
   { id: 'cable-crunch', name: '绳索卷腹', muscle: '核心', kind: 'weighted' },
 ]
+
+function exerciseDefinitions(customExercises = []) {
+  return [...EXERCISES, ...customExercises]
+}
+
+function resolveExercise(exerciseId, customExercises = []) {
+  return EXERCISES.find((definition) => definition.id === exerciseId) || customExercises.find((definition) => definition.id === exerciseId)
+}
 
 function uid() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
@@ -38,7 +47,7 @@ function localDate(date = new Date()) {
 }
 
 function emptyData() {
-  return { version: 1, workouts: [], activeWorkout: null, restSeconds: 90, demo: false }
+  return { version: 1, workouts: [], activeWorkout: null, restSeconds: 90, demo: false, customExercises: [] }
 }
 
 /** Demo workouts are explicitly marked and can be removed together before recording. */
@@ -73,16 +82,16 @@ function createInitialData(now = new Date()) {
       })),
     })
   })
-  return { version: 1, workouts, activeWorkout: null, restSeconds: 90, demo: true }
+  return { version: 1, workouts, activeWorkout: null, restSeconds: 90, demo: true, customExercises: [] }
 }
 
-function exerciseVolume(exercise) {
-  if (EXERCISES.find((definition) => definition.id === exercise.exerciseId)?.kind === 'bodyweight') return 0
+function exerciseVolume(exercise, customExercises = []) {
+  if (resolveExercise(exercise.exerciseId, customExercises)?.kind === 'bodyweight') return 0
   return exercise.sets.reduce((total, set) => total + (set.completed ? set.weight * set.reps : 0), 0)
 }
 
-function workoutVolume(workout) {
-  return workout.exercises.reduce((total, exercise) => total + exerciseVolume(exercise), 0)
+function workoutVolume(workout, customExercises = []) {
+  return workout.exercises.reduce((total, exercise) => total + exerciseVolume(exercise, customExercises), 0)
 }
 
 function workoutSetCount(workout) {
@@ -154,6 +163,21 @@ function parseImport(source) {
   }
   const data = record(parsed, '备份')
   if (data.version !== 1) fail('备份版本不受支持。')
+  // Version 1 backups predating custom exercises omitted this field. Preserve all
+  // their existing workout/set IDs and values, adding only an empty catalog.
+  const definitionIds = new Set(EXERCISES.map((definition) => definition.id))
+  const customExercises = data.customExercises === undefined ? [] : list(data.customExercises, '自定义动作列表', 500).map((value) => {
+    const definition = record(value, '自定义动作')
+    const identifier = text(definition.id, '自定义动作标识', 100)
+    if (!/^custom-[A-Za-z0-9][A-Za-z0-9_-]*$/.test(identifier)) fail('自定义动作标识应以 custom- 开头且仅使用字母、数字、连字符或下划线。')
+    if (definitionIds.has(identifier)) fail('动作标识重复。')
+    definitionIds.add(identifier)
+    const name = text(typeof definition.name === 'string' ? definition.name.trim() : definition.name, '自定义动作名称', 60)
+    if (!MUSCLE_GROUPS.includes(definition.muscle)) fail('自定义动作的训练部位不受支持。')
+    if (!['weighted', 'bodyweight'].includes(definition.kind)) fail('自定义动作的类型不受支持。')
+    return { id: identifier, name, muscle: definition.muscle, kind: definition.kind }
+  })
+  const definitions = new Map(exerciseDefinitions(customExercises).map((definition) => [definition.id, definition]))
   const identifiers = new Set ()
   const id = (value) => {
     const identifier = text(value, '记录标识', 128)
@@ -172,7 +196,7 @@ function parseImport(source) {
       exercises: list(workout.exercises, '动作列表', 100).map((value) => {
         const exercise = record(value, '动作')
         const exerciseId = text(exercise.exerciseId, '动作名称', 100)
-        const definition = EXERCISES.find((item) => item.id === exerciseId)
+        const definition = definitions.get(exerciseId)
         if (!definition) fail('备份包含不支持的动作。')
         return {
           id: id(exercise.id),
@@ -199,6 +223,7 @@ function parseImport(source) {
     activeWorkout: data.activeWorkout === null ? null : parseWorkout(data.activeWorkout),
     restSeconds: number(data.restSeconds, '休息时长', 0, 1800, true),
     demo: boolean(data.demo, '示例数据标识'),
+    customExercises,
   }
 }
 
@@ -240,4 +265,4 @@ function saveData(data, storage = defaultStorage()) {
   }
 }
 
-module.exports = { STORAGE_KEY, MUSCLE_GROUPS, EXERCISES, uid, localDate, emptyData, createInitialData, exerciseVolume, workoutVolume, workoutSetCount, formatVolume, previousExercise, parseImport, loadData, saveData }
+module.exports = { STORAGE_KEY, MUSCLE_GROUPS, EXERCISES, exerciseDefinitions, resolveExercise, uid, localDate, emptyData, createInitialData, exerciseVolume, workoutVolume, workoutSetCount, formatVolume, previousExercise, parseImport, loadData, saveData }

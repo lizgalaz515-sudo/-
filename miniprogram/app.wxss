@@ -1,4 +1,6 @@
 page {
+  width: 100%;
+  box-sizing: border-box;
   min-height: 100%;
   background: #f7f7fb;
   color: #272536;
@@ -7,4 +9,38 @@ page {
 }
 button::after { border: none; }
 button { box-sizing: border-box; }
-view, text, input, textarea { box-sizing: border-box; }
+view, text, input, textarea, scroll-view, picker { box-sizing: border-box; }
+
+/*
+ * Native style:v2 supplies button[size] widths, padding and line-height.
+ * A browser reset does not model those defaults. Keep this class reset ahead
+ * of the page's scoped variants, whose specificity is at least the same.
+ */
+.app-shell .ui-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: 1.5;
+  text-align: left;
+  text-decoration: none;
+  overflow: visible;
+}
+
+.app-shell .ui-button::after {
+  border: 0;
+}

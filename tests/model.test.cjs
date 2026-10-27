@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const {
   createInitialData, emptyData, exerciseVolume, formatVolume, loadData,
   localDate, parseImport, previousExercise, saveData, STORAGE_KEY,
-  workoutSetCount, workoutVolume,
+  workoutSetCount, workoutVolume, EXERCISES, exerciseDefinitions, resolveExercise,
 } = require('../miniprogram/utils/model.js')
 
 function fixture() {
@@ -112,6 +112,138 @@ describe('backup validation', () => {
     source.workouts[0].exercises[1].sets[0].weight = 10
     assert.throws(() => parseImport(JSON.stringify(source)), /自重动作/)
     assert.throws(() => parseImport(' '.repeat(10_000_001)), /文件过大/)
+  })
+})
+
+describe('custom exercise catalogs and backward-compatible backups', () => {
+  function catalog() {
+    return [
+      { id: 'custom-machine-press', name: '史密斯推肩', muscle: '肩部', kind: 'weighted' },
+      { id: 'custom-band-pullup', name: '弹力带引体向上', muscle: '背部', kind: 'bodyweight' },
+    ]
+  }
+
+  function customData() {
+    const source = data()
+    source.customExercises = catalog()
+    source.workouts[0].exercises[0].exerciseId = 'custom-machine-press'
+    source.workouts[0].exercises[1].exerciseId = 'custom-band-pullup'
+    source.activeWorkout = {
+      id: 'draft', date: '2026-10-27', title: '肩部训练', notes: '下次接着练', durationMinutes: 12,
+      exercises: [{
+        id: 'draft-press', exerciseId: 'custom-machine-press',
+        sets: [{ id: 'draft-set', weight: 22.5, reps: 12, completed: false }],
+      }],
+    }
+    return source
+  }
+
+  it('migrates old version 1 local storage and JSON without changing weights, history, active records, or storage key', () => {
+    const legacy = data()
+    legacy.activeWorkout = {
+      id: 'legacy-draft', date: '2026-10-26', title: '肩部训练', notes: '旧草稿', durationMinutes: 18,
+      exercises: [{
+        id: 'legacy-press', exerciseId: 'shoulder-press',
+        sets: [{ id: 'legacy-set', weight: 17.5, reps: 9, completed: false }],
+      }],
+    }
+    delete legacy.customExercises
+    const snapshot = JSON.stringify(legacy)
+    const migrated = parseImport(snapshot)
+    assert.deepEqual(migrated, { ...legacy, customExercises: [] })
+    assert.deepEqual(migrated.workouts, legacy.workouts)
+    assert.deepEqual(migrated.activeWorkout, legacy.activeWorkout)
+    let usedKey
+    assert.deepEqual(loadData({ getItem: (key) => { usedKey = key; return snapshot } }), migrated)
+    assert.equal(usedKey, 'lianji.fitness.v1')
+    assert.equal(STORAGE_KEY, 'lianji.fitness.v1')
+    assert.equal(JSON.stringify(legacy), snapshot)
+  })
+
+  it('keeps dumbbell shoulder press stable and offers a separate barbell definition', () => {
+    assert.deepEqual(resolveExercise('shoulder-press'), { id: 'shoulder-press', name: '哑铃推肩', muscle: '肩部', kind: 'weighted' })
+    assert.deepEqual(resolveExercise('barbell-shoulder-press'), { id: 'barbell-shoulder-press', name: '杠铃推肩', muscle: '肩部', kind: 'weighted' })
+    assert.deepEqual(emptyData().customExercises, [])
+    assert.deepEqual(createInitialData().customExercises, [])
+  })
+
+  it('resolves built-in and custom definitions without changing either catalog', () => {
+    const custom = catalog()
+    const snapshot = JSON.stringify(custom)
+    const combined = exerciseDefinitions(custom)
+    assert.equal(combined.length, EXERCISES.length + custom.length)
+    assert.equal(resolveExercise('custom-machine-press', custom), custom[0])
+    assert.equal(resolveExercise('custom-missing', custom), undefined)
+    assert.equal(resolveExercise('custom-machine-press'), undefined)
+    combined.pop()
+    assert.equal(JSON.stringify(custom), snapshot)
+    assert.equal(exerciseDefinitions().length, EXERCISES.length)
+  })
+
+  it('round-trips custom completed workouts, unfinished drafts, and local storage', () => {
+    const source = customData()
+    const decoded = parseImport(JSON.stringify(source))
+    assert.deepEqual(decoded, source)
+    let stored
+    assert.equal(saveData(source, { setItem: (key, value) => { assert.equal(key, STORAGE_KEY); stored = value } }), true)
+    assert.deepEqual(loadData({ getItem: () => stored }), source)
+    assert.equal(decoded.activeWorkout.exercises[0].sets[0].completed, false)
+    assert.equal(decoded.activeWorkout.exercises[0].sets[0].weight, 22.5)
+  })
+
+  it('preserves historical names when a new catalog entry renames only an active exercise', () => {
+    const source = customData()
+    source.customExercises.push({ id: 'custom-renamed-press', name: '史密斯坐姿推肩', muscle: '肩部', kind: 'weighted' })
+    source.activeWorkout.exercises[0].exerciseId = 'custom-renamed-press'
+    const restored = parseImport(JSON.stringify(source))
+    assert.equal(resolveExercise(restored.workouts[0].exercises[0].exerciseId, restored.customExercises).name, '史密斯推肩')
+    assert.equal(resolveExercise(restored.activeWorkout.exercises[0].exerciseId, restored.customExercises).name, '史密斯坐姿推肩')
+    assert.deepEqual(restored.workouts[0].exercises[0].sets, fixture().exercises[0].sets)
+  })
+
+  it('excludes custom bodyweight exercises and incomplete sets from weighted volume', () => {
+    const source = customData()
+    assert.equal(exerciseVolume(source.workouts[0].exercises[0], source.customExercises), 760)
+    assert.equal(exerciseVolume(source.workouts[0].exercises[1], source.customExercises), 0)
+    assert.equal(workoutVolume(source.workouts[0], source.customExercises), 760)
+    assert.equal(workoutVolume(source.activeWorkout, source.customExercises), 0)
+    assert.equal(workoutSetCount(source.workouts[0]), 3)
+    // An aggregation caller can pass an unvalidated object; the catalog still
+    // prevents counting self-weight as external training volume.
+    const bodyweight = { ...source.workouts[0].exercises[1], sets: [{ id: 'not-imported', weight: 10, reps: 8, completed: true }] }
+    assert.equal(exerciseVolume(bodyweight, source.customExercises), 0)
+    source.workouts[0].exercises[1].sets[0].weight = 10
+    assert.throws(() => parseImport(JSON.stringify(source)), /自重动作/)
+  })
+
+  it('trims custom exercise names and accepts at most 500 definitions', () => {
+    const source = { ...emptyData(), customExercises: [{ ...catalog()[0], name: '  史密斯推肩  ' }] }
+    assert.equal(parseImport(JSON.stringify(source)).customExercises[0].name, '史密斯推肩')
+    source.customExercises = Array.from({ length: 500 }, (_, index) => ({ ...catalog()[0], id: `custom-exercise-${index}` }))
+    assert.equal(parseImport(JSON.stringify(source)).customExercises.length, 500)
+    source.customExercises.push({ ...catalog()[0], id: 'custom-exercise-500' })
+    assert.throws(() => parseImport(JSON.stringify(source)), /自定义动作列表/)
+  })
+
+  it('rejects duplicate IDs, built-in shadowing, unknown references, invalid enums, names, and catalog shapes', () => {
+    const invalidDefinitions = [
+      [catalog()[0], { ...catalog()[0] }],
+      [{ ...catalog()[0], id: 'shoulder-press' }],
+      [{ ...catalog()[0], id: 'custom-' }],
+      [{ ...catalog()[0], name: '   ' }],
+      [{ ...catalog()[0], name: '练'.repeat(61) }],
+      [{ ...catalog()[0], muscle: '全身' }],
+      [{ ...catalog()[0], kind: 'duration' }],
+      [{ ...catalog()[0], id: '__proto__' }],
+      null,
+      {},
+    ]
+    for (const customExercises of invalidDefinitions) {
+      assert.throws(() => parseImport(JSON.stringify({ ...emptyData(), customExercises })), /无法导入/)
+    }
+    const unknown = customData()
+    unknown.customExercises.pop()
+    assert.throws(() => parseImport(JSON.stringify(unknown)), /不支持的动作/)
   })
 })
 

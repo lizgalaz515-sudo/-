@@ -9,7 +9,6 @@ const addDays = (date, count) => {
   next.setDate(next.getDate() + count);
   return next;
 };
-const names = new Map(model.EXERCISES.map((exercise) => [exercise.id, exercise]));
 const recoveryPointerKey = `${model.STORAGE_KEY}.recovery.latest`;
 const templateIds = {
   '背部': ['lat-pulldown', 'seated-row', 'barbell-row'],
@@ -20,10 +19,10 @@ const templateIds = {
   '核心': ['crunch', 'hanging-leg-raise']
 };
 
-function decorateWorkout(workout) {
+function decorateWorkout(workout, customExercises = []) {
   if (!workout) return null;
   const exercises = workout.exercises.map((exercise) => {
-    const definition = names.get(exercise.exerciseId) || { name: '自定义动作', muscle: '其他', kind: 'weighted' };
+    const definition = model.resolveExercise(exercise.exerciseId, customExercises) || { name: '自定义动作', muscle: '其他', kind: 'weighted' };
     return {
       ...exercise,
       name: definition.name,
@@ -41,12 +40,14 @@ function decorateWorkout(workout) {
     muscles: [...new Set(exercises.map((exercise) => exercise.muscle))].join(' / '),
     exerciseCount: exercises.length,
     setCount: model.workoutSetCount(workout),
-    volumeLabel: number(model.workoutVolume(workout)),
+    volumeLabel: number(model.workoutVolume(workout, customExercises)),
     durationLabel: `${workout.durationMinutes} 分钟`
   };
 }
 
 function buildView(store, selectedDate, monthKey, selectedMuscle) {
+  const definitions = model.exerciseDefinitions(store.customExercises);
+  const names = new Map(definitions.map((exercise) => [exercise.id, exercise]));
   const today = new Date();
   const todayDate = keyOf(today);
   const monday = addDays(dateFromKey(todayDate), -((today.getDay() + 6) % 7));
@@ -75,7 +76,7 @@ function buildView(store, selectedDate, monthKey, selectedMuscle) {
     const start = addDays(monday, (index - 6) * 7);
     const end = keyOf(addDays(start, 7));
     const included = sorted.filter((workout) => workout.date >= keyOf(start) && workout.date < end);
-    const value = included.reduce((sum, workout) => sum + model.workoutVolume(workout), 0);
+    const value = included.reduce((sum, workout) => sum + model.workoutVolume(workout, store.customExercises), 0);
     return { label: `${start.getMonth() + 1}/${start.getDate()}`, value, volumeLabel: number(value), isCurrent: index === 6 };
   });
   const peak = Math.max(1, ...rawBars.map((bar) => bar.value));
@@ -96,15 +97,16 @@ function buildView(store, selectedDate, monthKey, selectedMuscle) {
     streak += 1;
     cursor = addDays(cursor, -1);
   }
-  const active = decorateWorkout(store.activeWorkout);
+  const active = decorateWorkout(store.activeWorkout, store.customExercises);
   if (active) active.exercises.forEach((exercise) => {
     const previous = model.previousExercise(store.workouts, exercise.exerciseId);
     const completed = previous ? previous.sets.filter((set) => set.completed) : [];
     const best = completed.reduce((result, set) => !result || set.weight > result.weight || set.weight === result.weight && set.reps > result.reps ? set : result, null);
     exercise.previousLabel = best ? `上次参考 · ${exercise.kind === 'bodyweight' ? '自重' : `${best.weight} kg`} × ${best.reps} 次` : '第一次记录，从这一组开始';
   });
-  const options = model.EXERCISES.filter((exercise) => exercise.muscle === selectedMuscle).map((exercise) => ({
+  const options = definitions.filter((exercise) => exercise.muscle === selectedMuscle).map((exercise) => ({
     ...exercise,
+    custom: exercise.id.indexOf('custom-') === 0,
     selected: Boolean(store.activeWorkout && store.activeWorkout.exercises.some((item) => item.exerciseId === exercise.id))
   }));
   return {
@@ -115,18 +117,18 @@ function buildView(store, selectedDate, monthKey, selectedMuscle) {
     weekLabel: `${monday.getMonth() + 1}.${monday.getDate()} — ${addDays(monday, 6).getMonth() + 1}.${addDays(monday, 6).getDate()}`,
     summary: {
       weekWorkouts: weekly.length,
-      weekVolume: number(weekly.reduce((sum, workout) => sum + model.workoutVolume(workout), 0)),
+      weekVolume: number(weekly.reduce((sum, workout) => sum + model.workoutVolume(workout, store.customExercises), 0)),
       weekSets: weekly.reduce((sum, workout) => sum + model.workoutSetCount(workout), 0),
       streak,
       totalWorkouts: sorted.length,
-      totalVolume: number(sorted.reduce((sum, workout) => sum + model.workoutVolume(workout), 0)),
+      totalVolume: number(sorted.reduce((sum, workout) => sum + model.workoutVolume(workout, store.customExercises), 0)),
       totalSets: sorted.reduce((sum, workout) => sum + model.workoutSetCount(workout), 0)
     },
     weekDays,
     calendar,
     calendarLabel: `${month.getFullYear()}年${month.getMonth() + 1}月`,
-    recentWorkouts: sorted.slice(0, 3).map(decorateWorkout),
-    historyWorkouts: sorted.filter((workout) => workout.date === selectedDate).map(decorateWorkout),
+    recentWorkouts: sorted.slice(0, 3).map((workout) => decorateWorkout(workout, store.customExercises)),
+    historyWorkouts: sorted.filter((workout) => workout.date === selectedDate).map((workout) => decorateWorkout(workout, store.customExercises)),
     selectedDateLabel: `${dateFromKey(selectedDate).getMonth() + 1}月${dateFromKey(selectedDate).getDate()}日`,
     active,
     exerciseOptions: options,
@@ -165,6 +167,7 @@ Page({
     detail: null,
     demo: false,
     recoveryWarning: false,
+    storageReadFailed: false,
     muscles: model.MUSCLE_GROUPS,
     selectedMuscle: '背部',
     selectedDate: keyOf(new Date()),
@@ -178,6 +181,11 @@ Page({
     heatmap: [],
     muscleStats: [],
     exerciseOptions: [],
+    editorName: '',
+    editorMuscle: '背部',
+    editorKind: 'weighted',
+    editorError: '',
+    editingExerciseId: '',
     importText: '',
     restSeconds: 90,
     restRemaining: 90,
@@ -189,30 +197,43 @@ Page({
     this._setDrafts = Object.create(null);
     this._pendingCorrupt = null;
     this._recoveryRaw = null;
+    this._storageReadFailed = false;
+    let verifiedStore = null;
     if (typeof wx.getStorageSync === 'function') {
       try {
-        const pointer = wx.getStorageSync(recoveryPointerKey);
-        if (pointer) this._recoveryRaw = wx.getStorageSync(pointer) || null;
         const raw = wx.getStorageSync(model.STORAGE_KEY);
         if (raw) {
           const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
-          try { model.parseImport(text); }
+          try { verifiedStore = model.parseImport(text); }
           catch (_) {
             this._pendingCorrupt = text;
             this._recoveryRaw = text;
           }
         }
-      } catch (_) {}
+      } catch (_) { this._storageReadFailed = true; }
+      try {
+        const pointer = wx.getStorageSync(recoveryPointerKey);
+        if (pointer && !this._recoveryRaw) this._recoveryRaw = wx.getStorageSync(pointer) || null;
+      } catch (_) { /* An unavailable recovery archive does not invalidate a valid main record. */ }
     }
-    this._store = model.loadData();
+    this._store = verifiedStore || model.loadData();
+    if (!Array.isArray(this._store.customExercises)) this._store.customExercises = [];
     this._startedAt = this._store.activeWorkout ? Date.now() : null;
     this._durationBase = this._store.activeWorkout ? this._store.activeWorkout.durationMinutes : 0;
     this._deadline = 0;
     this._restInterval = null;
     this._refresh();
     this._setRestRemaining(this._store.restSeconds);
-    this.setData({ restSeconds: this._store.restSeconds, recoveryWarning: Boolean(this._recoveryRaw) });
-    if (this._pendingCorrupt) toast('旧记录无法读取，原始数据已保留，请先导出');
+    this.setData({ restSeconds: this._store.restSeconds, recoveryWarning: Boolean(this._recoveryRaw), storageReadFailed: this._storageReadFailed });
+    if (this._storageReadFailed) toast('本机记录暂时无法读取，已暂停保存，请重试读取');
+    else if (this._pendingCorrupt) toast('旧记录无法读取，原始数据已保留，请先导出');
+  },
+
+  retryStorageRead() {
+    if (!this._storageReadFailed) return;
+    this._clearRestInterval();
+    this.onLoad();
+    if (!this._storageReadFailed) toast('本机记录已重新读取');
   },
 
   onShow() {
@@ -251,6 +272,11 @@ Page({
 
   _commit() {
     if (this._store.activeWorkout) this._store.activeWorkout.durationMinutes = this._elapsedMinutes();
+    if (this._storageReadFailed) {
+      this._refresh();
+      toast('读取失败时暂停保存，请先重试读取本机记录');
+      return false;
+    }
     if (this._pendingCorrupt) {
       this._refresh();
       toast('旧记录已保留，请先导出原始备份');
@@ -263,6 +289,10 @@ Page({
   },
 
   _preserveRecovery() {
+    if (this._storageReadFailed) {
+      toast('请先重试读取本机记录，原记录未被覆盖');
+      return false;
+    }
     if (!this._pendingCorrupt) return true;
     try {
       const key = `${model.STORAGE_KEY}.recovery.${Date.now()}`;
@@ -319,6 +349,7 @@ Page({
   },
 
   startWorkout() {
+    if (this._storageReadFailed) return toast('请先重试读取本机记录，原记录未被覆盖');
     if (this._store.activeWorkout) return this.openStart();
     if (this._store.demo) {
       confirm('开始自己的记录？', '示例数据会被清空，接下来只记录你自己的训练。当前画面是功能示例，不是你的历史成绩。', () => {
@@ -331,8 +362,8 @@ Page({
     }
     const muscle = this.data.selectedMuscle;
     const preferred = templateIds[muscle] || [];
-    let definitions = preferred.map((id) => names.get(id)).filter(Boolean);
-    if (!definitions.length) definitions = model.EXERCISES.filter((exercise) => exercise.muscle === muscle).slice(0, 3);
+    let definitions = preferred.map((id) => model.resolveExercise(id, this._store.customExercises)).filter(Boolean);
+    if (!definitions.length) definitions = model.exerciseDefinitions(this._store.customExercises).filter((exercise) => exercise.muscle === muscle).slice(0, 3);
     this._store.activeWorkout = {
       id: model.uid(),
       date: keyOf(new Date()),
@@ -348,6 +379,10 @@ Page({
   },
 
   closeSheet() {
+    if (this.data.sheet === 'customExercise') {
+      this.setData({ sheet: this.data.editingExerciseId ? '' : 'exercise', editingExerciseId: '', editorError: '' });
+      return;
+    }
     this.setData({ sheet: '', detail: null });
   },
 
@@ -361,12 +396,73 @@ Page({
 
   chooseExercise(event) {
     if (!this._store.activeWorkout) return;
-    const definition = names.get(event.currentTarget.dataset.id);
+    const definition = model.resolveExercise(event.currentTarget.dataset.id, this._store.customExercises);
     if (!definition) return;
     if (this._store.activeWorkout.exercises.some((exercise) => exercise.exerciseId === definition.id)) return toast('这个动作已经添加了');
+    if (this._store.activeWorkout.exercises.length >= 100) return toast('每次训练最多记录 100 个动作');
     this._store.activeWorkout.exercises.push(this._makeExercise(definition));
     this.setData({ sheet: '' });
     this._commit();
+  },
+
+  openCustomExercise() {
+    if (!this._store.activeWorkout) return;
+    this.setData({ sheet: 'customExercise', editorName: '', editorMuscle: this.data.selectedMuscle, editorKind: 'weighted', editorError: '', editingExerciseId: '' });
+  },
+
+  startRenameExercise(event) {
+    const exercise = this._findExercise(event.currentTarget.dataset.exercise);
+    if (!exercise) return;
+    const definition = model.resolveExercise(exercise.exerciseId, this._store.customExercises);
+    if (!definition) return;
+    this.setData({ sheet: 'customExercise', editorName: definition.name, editorMuscle: definition.muscle, editorKind: definition.kind, editorError: '', editingExerciseId: exercise.id });
+  },
+
+  updateExerciseName(event) {
+    this.setData({ editorName: String(event.detail.value).slice(0, 60), editorError: '' });
+  },
+
+  selectEditorMuscle(event) {
+    const muscle = event.currentTarget.dataset.muscle;
+    if (model.MUSCLE_GROUPS.indexOf(muscle) < 0) return;
+    this.setData({ editorMuscle: muscle, editorError: '' });
+  },
+
+  setExerciseKind(event) {
+    const kind = event.currentTarget.dataset.kind;
+    if (this.data.editingExerciseId || ['weighted', 'bodyweight'].indexOf(kind) < 0) return;
+    this.setData({ editorKind: kind, editorError: '' });
+  },
+
+  saveCustomExercise() {
+    const active = this._store.activeWorkout;
+    if (!active) return;
+    const name = this.data.editorName.trim();
+    const muscle = this.data.editorMuscle;
+    const kind = this.data.editorKind;
+    if (!name || name.length > 60) return this.setData({ editorError: '请输入 1–60 字的动作名称' });
+    if (model.MUSCLE_GROUPS.indexOf(muscle) < 0 || ['weighted', 'bodyweight'].indexOf(kind) < 0) return;
+    const editing = this.data.editingExerciseId ? this._findExercise(this.data.editingExerciseId) : null;
+    if (this.data.editingExerciseId && !editing) return;
+    const definitions = model.exerciseDefinitions(this._store.customExercises);
+    let definition = definitions.find((item) => item.name.toLowerCase() === name.toLowerCase() && item.muscle === muscle && item.kind === kind);
+    if (definition && active.exercises.some((item) => item.id !== (editing && editing.id) && item.exerciseId === definition.id)) {
+      return this.setData({ editorError: '这个动作已经在本次训练中，可以直接修改已有的组' });
+    }
+    if (!editing && active.exercises.length >= 100) return this.setData({ editorError: '每次训练最多记录 100 个动作' });
+    if (editing && model.resolveExercise(editing.exerciseId, this._store.customExercises).kind !== kind) {
+      return this.setData({ editorError: '修改名称时保留原训练类型，重量和组数不会改变' });
+    }
+    if (!definition) {
+      if (this._store.customExercises.length >= 500) return this.setData({ editorError: '自定义动作最多保存 500 个' });
+      definition = { id: `custom-${model.uid()}`, name, muscle, kind };
+      this._store.customExercises.push(definition);
+    }
+    if (editing) editing.exerciseId = definition.id;
+    else active.exercises.push(this._makeExercise(definition));
+    this.setData({ sheet: '', selectedMuscle: muscle, editorError: '', editingExerciseId: '' });
+    const saved = this._commit();
+    if (saved) toast(editing ? '动作名称已更新，原来的组和重量已保留' : '已添加到训练和你的动作库');
   },
 
   addSet(event) {
@@ -397,7 +493,7 @@ Page({
     const exercise = this._findExercise(exerciseId);
     const set = exercise && exercise.sets.find((item) => item.id === setId);
     if (!set || !['weight', 'reps'].includes(field)) return;
-    if (field === 'weight' && names.get(exercise.exerciseId)?.kind === 'bodyweight') return;
+    if (field === 'weight' && model.resolveExercise(exercise.exerciseId, this._store.customExercises)?.kind === 'bodyweight') return;
     const raw = String(event.detail.value);
     this._setDrafts[draftKey(exerciseId, setId, field)] = raw;
     const value = inputNumber(raw, field);
@@ -504,7 +600,7 @@ Page({
 
   showWorkout(event) {
     const workout = this._store.workouts.find((item) => item.id === event.currentTarget.dataset.id);
-    if (workout) this.setData({ detail: decorateWorkout(workout), sheet: 'detail' });
+    if (workout) this.setData({ detail: decorateWorkout(workout, this._store.customExercises), sheet: 'detail' });
   },
 
   deleteWorkout(event) {
@@ -518,6 +614,7 @@ Page({
   },
 
   exportData() {
+    if (this._storageReadFailed) return toast('请先重试读取本机记录，再导出完整备份');
     wx.setClipboardData({
       data: JSON.stringify(this._store, null, 2),
       success: () => toast('备份已复制，请粘贴到备忘录保存'),

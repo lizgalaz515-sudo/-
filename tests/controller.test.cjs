@@ -31,7 +31,10 @@ function launch(initial = model.emptyData(), options = {}) {
       showToast: (payload) => toasts.push(payload.title),
       showModal: (payload) => { dialogs.push(payload); payload.success({ confirm: options.confirm !== false }); },
       setClipboardData: (payload) => { clipboard = payload.data; payload.success(); },
-      getStorageSync: (key) => local.get(key),
+      getStorageSync: (key) => {
+        if (options.readFails && key === model.STORAGE_KEY) throw new Error('read unavailable');
+        return local.get(key);
+      },
       setStorageSync: (key, value) => {
         if (options.recoveryFails) throw new Error('quota');
         local.set(key, value);
@@ -358,4 +361,167 @@ test('cleared and invalid input stay editable while persisted numbers remain val
   page.normalizeSet(event(dataset, '2.5'));
   assert.equal(page.data.active.exercises[0].sets[0].reps, 10);
   assert.match(toasts.at(-1), /整数/);
+});
+
+test('a shoulder workout accepts four built-in exercises and additional custom exercises', () => {
+  const { page, saved } = launch();
+  page.selectMuscle(event({ muscle: '肩部' }));
+  page.startWorkout();
+  page.chooseExercise(event({ id: 'barbell-shoulder-press' }));
+  page.chooseExercise(event({ id: 'face-pull' }));
+  assert.equal(page.data.active.exercises.length, 4);
+  page.openCustomExercise();
+  page.updateExerciseName(event({}, '  器械反向飞鸟  '));
+  page.saveCustomExercise();
+  assert.equal(page.data.active.exercises.length, 5);
+  assert.equal(page.data.active.exercises[4].name, '器械反向飞鸟');
+  assert.equal(saved().customExercises.length, 1);
+  assert.equal(saved().customExercises[0].muscle, '肩部');
+  assert.doesNotThrow(() => model.parseImport(JSON.stringify(saved())));
+  const reopened = launch(saved()).page;
+  reopened.openExercisePicker();
+  reopened.selectMuscle(event({ muscle: '肩部' }));
+  assert.ok(reopened.data.exerciseOptions.some((definition) => definition.name === '器械反向飞鸟' && definition.selected));
+});
+
+test('renaming an exercise to barbell shoulder press retains sets and does not rewrite earlier history', () => {
+  const initial = model.emptyData();
+  initial.workouts = [{ id: 'previous', date: '2026-10-23', title: '肩部训练', notes: '', durationMinutes: 40, exercises: [{ id: 'previous-exercise', exerciseId: 'shoulder-press', sets: [{ id: 'previous-set', weight: 17.5, reps: 8, completed: true }] }] }];
+  const { page, saved } = launch(initial);
+  page.selectMuscle(event({ muscle: '肩部' }));
+  page.startWorkout();
+  const before = structuredClone(page._store.activeWorkout.exercises[0]);
+  page.startRenameExercise(event({ exercise: before.id }));
+  assert.equal(page.data.editorName, '哑铃推肩');
+  page.updateExerciseName(event({}, '杠铃推肩'));
+  page.saveCustomExercise();
+  const after = saved().activeWorkout.exercises[0];
+  assert.equal(after.exerciseId, 'barbell-shoulder-press');
+  assert.equal(after.id, before.id);
+  assert.deepEqual(after.sets, before.sets);
+  assert.deepEqual(saved().workouts, initial.workouts);
+  assert.equal(saved().customExercises.length, 0);
+  page.showWorkout(event({ id: 'previous' }));
+  assert.equal(page.data.detail.exercises[0].name, '哑铃推肩');
+});
+
+test('renaming a custom exercise creates a separate definition and leaves its historical name intact', () => {
+  const initial = model.emptyData();
+  const definition = { id: 'custom-previous-press', name: '器械推肩', muscle: '肩部', kind: 'weighted' };
+  initial.customExercises.push(definition);
+  initial.workouts = [{ id: 'custom-history', date: '2026-10-23', title: '肩部训练', notes: '', durationMinutes: 30, exercises: [{ id: 'historical-custom', exerciseId: definition.id, sets: [{ id: 'historical-custom-set', weight: 30, reps: 10, completed: true }] }] }];
+  const { page, saved } = launch(initial);
+  page.selectMuscle(event({ muscle: '肩部' }));
+  page.startWorkout();
+  page.chooseExercise(event({ id: definition.id }));
+  const before = structuredClone(page._store.activeWorkout.exercises.at(-1));
+  page.startRenameExercise(event({ exercise: before.id }));
+  page.updateExerciseName(event({}, '单侧器械推肩'));
+  page.saveCustomExercise();
+  const after = saved().activeWorkout.exercises.at(-1);
+  assert.notEqual(after.exerciseId, before.exerciseId);
+  assert.deepEqual(after.sets, before.sets);
+  assert.equal(saved().customExercises.length, 2);
+  assert.equal(saved().customExercises[0].name, '器械推肩');
+  page.showWorkout(event({ id: 'custom-history' }));
+  assert.equal(page.data.detail.exercises[0].name, '器械推肩');
+  assert.doesNotThrow(() => model.parseImport(JSON.stringify(saved())));
+});
+
+test('empty and duplicate custom exercise names never change the current workout', () => {
+  const { page } = launch();
+  page.selectMuscle(event({ muscle: '肩部' }));
+  page.startWorkout();
+  const before = JSON.stringify(page._store);
+  page.openCustomExercise();
+  page.updateExerciseName(event({}, '   '));
+  page.saveCustomExercise();
+  assert.match(page.data.editorError, /动作名称/);
+  assert.equal(JSON.stringify(page._store), before);
+  page.updateExerciseName(event({}, '哑铃推肩'));
+  page.saveCustomExercise();
+  assert.match(page.data.editorError, /已经/);
+  assert.equal(JSON.stringify(page._store), before);
+});
+
+test('custom bodyweight exercises keep zero weight and participate in completed set statistics', () => {
+  const { page, saved, clipboard } = launch();
+  page.startWorkout();
+  page.openCustomExercise();
+  page.updateExerciseName(event({}, '靠墙倒立撑'));
+  page.selectEditorMuscle(event({ muscle: '肩部' }));
+  page.setExerciseKind(event({ kind: 'bodyweight' }));
+  page.saveCustomExercise();
+  const exercise = page._store.activeWorkout.exercises.at(-1);
+  assert.equal(exercise.sets[0].weight, 0);
+  page.changeSet(event({ exercise: exercise.id, set: exercise.sets[0].id, field: 'weight' }, '50'));
+  page.toggleSet(event({ exercise: exercise.id, set: exercise.sets[0].id }));
+  assert.equal(page.data.active.setCount, 1);
+  assert.equal(page.data.active.volumeLabel, '0');
+  assert.equal(saved().activeWorkout.exercises.at(-1).sets[0].weight, 0);
+  page.finishWorkout();
+  assert.equal(page.data.summary.totalSets, 1);
+  assert.equal(page.data.summary.totalVolume, '0');
+  page.exportData();
+  const imported = model.parseImport(clipboard());
+  assert.equal(imported.customExercises[0].name, '靠墙倒立撑');
+  assert.equal(imported.workouts[0].exercises[0].exerciseId, imported.customExercises[0].id);
+});
+
+test('old version-1 records without a catalog resume with their exact active sets', () => {
+  const legacy = model.emptyData();
+  delete legacy.customExercises;
+  legacy.activeWorkout = { id: 'legacy-active', date: '2026-10-23', title: '肩部训练', notes: '保留备注', durationMinutes: 7, exercises: [{ id: 'legacy-exercise', exerciseId: 'shoulder-press', sets: [{ id: 'legacy-set', weight: 22.5, reps: 12, completed: true }] }] };
+  const { page } = launch(legacy);
+  assert.equal(page.data.demo, false);
+  assert.deepEqual(page._store.activeWorkout, legacy.activeWorkout);
+  assert.equal(Array.isArray(page._store.customExercises), true);
+  assert.equal(page._store.customExercises.length, 0);
+  assert.equal(page.data.active.exercises[0].name, '哑铃推肩');
+  assert.equal(page.data.active.volumeLabel, '270');
+});
+
+test('failed custom exercise persistence remains exportable and keeps the failure message visible', () => {
+  const { page, clipboard, toasts } = launch(model.emptyData(), { storageFails: true });
+  page.startWorkout();
+  page.openCustomExercise();
+  page.updateExerciseName(event({}, '单侧绳索划船'));
+  page.saveCustomExercise();
+  assert.match(toasts.at(-1), /保存失败/);
+  page.exportData();
+  const imported = model.parseImport(clipboard());
+  assert.equal(imported.customExercises[0].name, '单侧绳索划船');
+});
+
+test('storage read failures block replacements until a successful reread restores existing workouts', () => {
+  const real = model.emptyData();
+  real.workouts.push(model.createInitialData().workouts[0]);
+  const raw = JSON.stringify(real);
+  const options = { readFails: true, local: new Map([[model.STORAGE_KEY, raw]]) };
+  const { page, local, saved, toasts } = launch(model.createInitialData(), options);
+  assert.equal(page.data.storageReadFailed, true);
+  page.startWorkout();
+  page.clearDemo();
+  page.openImport();
+  page.updateImport(event({}, JSON.stringify(model.emptyData())));
+  page.confirmImport();
+  assert.equal(saved(), undefined);
+  assert.equal(local.get(model.STORAGE_KEY), raw);
+  assert.match(toasts.at(-1), /未被覆盖/);
+  options.readFails = false;
+  page.retryStorageRead();
+  assert.equal(page.data.storageReadFailed, false);
+  assert.equal(page.data.summary.totalWorkouts, 1);
+  assert.deepEqual(page._store.workouts, real.workouts);
+  page.startWorkout();
+  assert.deepEqual(saved().workouts, real.workouts);
+});
+
+test('a verified native read is used directly rather than replacing records with a fallback demo', () => {
+  const real = model.emptyData();
+  real.workouts.push(model.createInitialData().workouts[0]);
+  const { page } = launch(model.createInitialData(), { local: new Map([[model.STORAGE_KEY, JSON.stringify(real)]]) });
+  assert.equal(page.data.demo, false);
+  assert.equal(page.data.summary.totalWorkouts, 1);
+  assert.deepEqual(page._store.workouts, real.workouts);
 });
